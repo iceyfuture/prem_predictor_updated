@@ -28,3 +28,4 @@ dashboard/.refresh.lock
 outputs/coldstart_sweep.csv
 outputs/charts/
 premier_league_history/player_gameweek.csv
+dashboard/.Rhistory
