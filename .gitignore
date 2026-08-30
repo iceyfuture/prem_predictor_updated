@@ -7,10 +7,14 @@ __pycache__/
 # --- personal: your own FPL team id lives here, not in the repo ---
 dashboard/fpl_config.json
 
-# --- API response cache + fitted-model cache (regenerated on every run) ---
+# --- API response cache (regenerated on every run) ---
 dashboard/.cache/
-.state/
 dashboard/.state/
+
+# .state/ holds FITTED MODEL PARAMETERS (blend weights, the supremacy map, corners state),
+# not cache - the build needs them, so they are tracked. Only the refit model cache is not.
+.state/dc_prem.json
+.state/odds_raw/
 
 # --- build artifacts (regenerate with dashboard/refresh.sh) ---
 dashboard/dashboard.json

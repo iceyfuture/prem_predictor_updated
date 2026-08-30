@@ -513,8 +513,18 @@ def build():
     print(f"  corners model: {cmodel['matches']} matches through {cmodel['asof']} "
           f"(+{len(crows)} from this season)")
     mapping = so.get_mapping()
-    blend = json.load(open(os.path.join(ROOT, ".state", "blend.json")))
-    wdc, wsup = blend["dc_weight"], blend["sup_weight"]
+    # Fitted blend weights. These live in .state/ and ARE committed - they are model
+    # parameters, not cache. Fall back to the documented production split rather than
+    # killing the whole build: a fresh clone that has not run build_blend.py yet should
+    # still produce a dashboard.
+    _bp = os.path.join(ROOT, ".state", "blend.json")
+    if os.path.exists(_bp):
+        blend = json.load(open(_bp))
+        wdc, wsup = blend["dc_weight"], blend["sup_weight"]
+    else:
+        wdc, wsup = 0.75, 0.25
+        print("  NOTE: .state/blend.json missing - using the default 0.75/0.25 split. "
+              "Run build_blend.py to refit it.")
 
     # club colour + abbreviation per team, for the FPL pitch
     team_meta = {}
