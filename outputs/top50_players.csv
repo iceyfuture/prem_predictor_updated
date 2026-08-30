@@ -1,0 +1,51 @@
+rank,player,position,latest_team,rating,w_goals,w_assists,w_goal_involvements,w_xgi,gi_per90,seasons
+1,Haaland,FWD,Man City,285.72,34.01,8.62,42.63,35.84,1.06,4
+2,B.Fernandes,MID,Man United,258.15,11.28,21.53,32.81,26.72,0.75,4
+3,Watkins,FWD,Aston Villa,252.03,22.48,10.61,33.09,22.65,0.74,6
+4,Saka,MID,Arsenal,231.24,12.46,14.91,27.37,21.65,0.74,8
+5,Mbeumo,MID,Man United,225.73,16.93,8.08,25.01,22.89,0.6,5
+6,Rice,MID,Arsenal,218.94,5.98,10.57,16.55,11.8,0.34,10
+7,Virgil,DEF,Liverpool,218.42,5.89,1.83,7.72,5.5,0.15,10
+8,Gibbs-White,MID,Nott'm Forest,216.12,13.11,10.33,23.45,16.47,0.54,8
+9,Gabriel,DEF,Arsenal,215.21,3.85,3.89,7.74,5.96,0.2,4
+10,Pickford,GKP,Everton,204.96,0.0,0.48,0.48,0.34,0.01,10
+11,Semenyo,MID,Man City,203.19,15.8,6.88,22.69,14.88,0.58,4
+12,Foden,MID,Man City,199.54,13.22,7.45,20.67,15.04,0.63,9
+13,Palmer,MID,Chelsea,197.78,15.87,7.66,23.53,22.53,0.73,7
+14,Tarkowski,DEF,Everton,193.38,2.1,2.74,4.84,5.75,0.09,10
+15,Bruno G.,MID,Arsenal,189.82,9.46,8.87,18.34,12.84,0.44,5
+16,Guéhi,DEF,Man City,182.34,3.12,3.96,7.08,5.81,0.16,5
+17,Saliba,DEF,Arsenal,176.52,1.97,0.34,2.31,3.25,0.06,6
+18,João Pedro,FWD,Chelsea,176.19,14.57,8.18,22.75,17.8,0.73,5
+19,Eze,MID,Arsenal,175.81,10.8,6.72,17.52,14.36,0.53,6
+20,Mitchell,DEF,Crystal Palace,171.17,1.06,5.02,6.08,5.21,0.13,7
+21,Leno,GKP,Fulham,170.09,0.0,0.71,0.71,0.02,0.01,8
+22,Szoboszlai,MID,Liverpool,166.51,6.32,8.54,14.86,13.33,0.41,3
+23,Iwobi,MID,Fulham,166.49,7.17,5.81,12.98,10.74,0.31,10
+24,Mateta,FWD,Crystal Palace,165.83,16.11,2.25,18.37,18.04,0.57,6
+25,Rogers,MID,Chelsea,164.77,9.41,8.86,18.26,11.14,0.52,3
+26,Enzo,MID,Chelsea,162.52,8.7,6.68,15.38,17.8,0.39,4
+27,Ødegaard,MID,Arsenal,162.12,5.78,11.04,16.82,12.93,0.52,6
+28,Welbeck,FWD,Chelsea,159.82,13.9,4.37,18.28,14.71,0.57,10
+29,Barnes,MID,Newcastle,159.64,11.04,4.67,15.7,12.14,0.54,9
+30,Wilson,MID,Brentford,158.12,9.34,8.18,17.52,9.89,0.63,7
+31,Anderson,MID,Man City,157.48,3.09,5.64,8.73,7.49,0.24,6
+32,Mac Allister,MID,Liverpool,157.11,5.67,6.59,12.26,10.13,0.31,7
+33,Gakpo,MID,Liverpool,156.33,10.25,6.17,16.42,15.1,0.52,4
+34,Henderson,GKP,Chelsea,152.11,0.0,0.03,0.03,0.08,0.0,7
+35,Martinez,GKP,Chelsea,151.65,0.0,0.59,0.59,0.08,0.01,4
+36,Calvert-Lewin,FWD,Leeds,150.65,12.66,3.24,15.91,16.28,0.46,10
+37,Collins,DEF,Brentford,149.48,1.66,3.87,5.53,4.36,0.13,5
+38,Wood,FWD,Nott'm Forest,148.7,13.69,1.49,15.18,11.09,0.55,9
+39,Isak,FWD,Liverpool,147.64,15.58,3.81,19.39,16.04,0.85,4
+40,Pope,GKP,Newcastle,146.66,0.0,0.59,0.59,0.1,0.02,10
+41,Burn,DEF,Newcastle,144.4,1.61,2.63,4.24,3.3,0.1,8
+42,Tavernier,MID,Bournemouth,142.68,6.48,6.19,12.67,13.63,0.38,4
+43,Neto,MID,Chelsea,142.41,5.18,9.35,14.53,11.39,0.44,7
+44,Konsa,DEF,Arsenal,141.52,1.18,0.86,2.04,2.75,0.04,7
+45,McGinn,MID,Aston Villa,140.51,5.15,6.15,11.3,9.1,0.29,7
+46,J.Murphy,MID,Newcastle,140.34,5.91,8.18,14.1,9.63,0.53,9
+47,Andersen,DEF,Fulham,139.93,0.59,1.57,2.16,3.68,0.05,6
+48,Casemiro,MID,Man Utd,138.15,6.42,3.38,9.8,8.39,0.32,4
+49,Richarlison,FWD,Tottenham,138.14,12.04,5.16,17.2,10.43,0.69,9
+50,O.Dango,MID,Brentford,138.01,6.97,6.97,13.94,12.73,0.51,4

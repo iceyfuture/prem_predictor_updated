@@ -1,0 +1,2 @@
+model,home_adv,rho,decay,window_years,ridge,n_matches_weighted_in,train_from,train_to,cutoff,n_teams
+dixon-coles,0.2426,-0.0834,8**(-age/3),8,8.0,3040,2018-08-10,2026-05-24,2026-05-25,30

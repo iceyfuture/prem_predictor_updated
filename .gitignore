@@ -1,0 +1,26 @@
+# --- environment ---
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# --- personal: your own FPL team id lives here, not in the repo ---
+dashboard/fpl_config.json
+
+# --- API response cache + fitted-model cache (regenerated on every run) ---
+dashboard/.cache/
+.state/
+dashboard/.state/
+
+# --- build artifacts (regenerate with dashboard/refresh.sh) ---
+dashboard/dashboard.json
+dashboard/standalone.html
+dashboard/floodlit_artifact.html
+dashboard/refresh.log
+dashboard/refresh.launchd.log
+dashboard/.refresh.lock
+
+# --- large regenerable analysis output ---
+outputs/coldstart_sweep.csv
+outputs/charts/
+premier_league_history/player_gameweek.csv

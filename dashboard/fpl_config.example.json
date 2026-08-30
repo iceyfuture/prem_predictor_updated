@@ -1,0 +1,4 @@
+{
+  "entry_id": 0,
+  "_note": "Copy to fpl_config.json and set your own FPL team id, from the URL fantasy.premierleague.com/entry/<ID>/event/1. Or skip the file and set the FPL_ENTRY_ID environment variable, which takes priority. Without either, the transfer planner falls back to the model's own last recommendation instead of your real squad."
+}

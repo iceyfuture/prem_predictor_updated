@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Floodlit &middot; Model Desk</title>
+<style>
+  :root{
+    --pl-purple:#37003C; --pl-pink:#E90052; --pl-cyan:#04F5FF; --pl-green:#00FF87;
+    --bg:#1B0020; --bg-2:#24012A; --panel:#2E0435; --panel-2:#3A0942;
+    --line:rgba(255,255,255,.09); --line-2:rgba(255,255,255,.16);
+    --ink:#F4EAF6; --muted:#B79BC0; --faint:#8A6E94; --amber:#FFC83C; --r:14px;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,sans-serif;
+  }
+  *{box-sizing:border-box} html,body{margin:0;padding:0}
+  body{background:
+      radial-gradient(1100px 560px at 82% -12%, rgba(4,245,255,.10), transparent 60%),
+      radial-gradient(900px 520px at 4% -5%, rgba(233,0,82,.10), transparent 58%), var(--bg);
+    color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;line-height:1.42}
+  .wrap{max-width:1280px;margin:0 auto;padding:0 16px}
+  .mono{font-family:var(--mono)}
+
+  header.topbar{position:sticky;top:0;z-index:30;background:rgba(27,0,32,.92);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+  .topbar-in{display:flex;align-items:center;gap:14px;min-height:58px;flex-wrap:wrap;padding:6px 0}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:900;letter-spacing:-.02em;font-size:17px}
+  .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--pl-green);box-shadow:0 0 14px var(--pl-green);animation:pulse 2.6s ease-in-out infinite}
+  .brand small{font-family:var(--mono);font-size:9.5px;font-weight:500;color:var(--muted);letter-spacing:.14em;text-transform:uppercase}
+  nav.tabs{display:flex;gap:3px;flex:1;flex-wrap:wrap}
+  nav.tabs button{background:transparent;border:0;color:var(--muted);font-family:var(--sans);font-size:13px;font-weight:700;padding:7px 12px;border-radius:9px;cursor:pointer}
+  nav.tabs button:hover{color:var(--ink);background:var(--panel)}
+  nav.tabs button[aria-selected="true"]{color:var(--bg);background:var(--pl-green)}
+
+  /* freshness strip */
+  .fresh{display:flex;gap:7px;flex-wrap:wrap;padding:9px 0}
+  .fchip{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:5px 11px;font-size:11px}
+  .fchip .fd{width:7px;height:7px;border-radius:50%;flex:none}
+  .fchip .fd.ok{background:var(--pl-green);box-shadow:0 0 7px rgba(0,255,135,.6)} .fchip .fd.stale{background:var(--amber)}
+  .fchip .fn{font-weight:700} .fchip .fa{font-family:var(--mono);font-size:9.5px;color:var(--faint)}
+
+  section.view{display:none;padding-bottom:60px} section.view.active{display:block}
+  .vhead{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:20px 0 4px}
+  .vhead h1{font-size:clamp(23px,4vw,36px);line-height:1.05;letter-spacing:-.03em;font-weight:900;margin:0}
+  .vhead h1 em{font-style:normal;background:linear-gradient(90deg,var(--pl-cyan),var(--pl-green));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .vhead p{color:var(--muted);font-size:13px;margin:6px 0 0;max-width:62ch}
+  .gwnav{display:flex;align-items:center;gap:6px}
+  .gwnav button{background:var(--panel);border:1px solid var(--line-2);color:var(--ink);border-radius:9px;width:32px;height:32px;font-size:15px;cursor:pointer;display:grid;place-items:center}
+  .gwnav button:hover:not(:disabled){background:var(--panel-2)} .gwnav button:disabled{opacity:.3;cursor:default}
+  .gwnav select{background:var(--panel);border:1px solid var(--line-2);color:var(--ink);border-radius:9px;padding:7px 10px;font-family:var(--mono);font-size:12px;font-weight:600;cursor:pointer}
+  .rule{height:1px;background:var(--line);margin:12px 0 14px}
+  .banner{background:rgba(255,200,60,.07);border:1px solid rgba(255,200,60,.28);border-radius:11px;padding:10px 13px;font-size:12.5px;color:var(--muted);margin-bottom:14px}
+  .banner b{color:var(--amber)}
+  .filters{display:flex;gap:7px;margin-bottom:14px;flex-wrap:wrap}
+  .filters button{background:var(--panel);border:1px solid var(--line-2);color:var(--muted);border-radius:999px;padding:7px 13px;font-size:12.5px;font-weight:600;cursor:pointer}
+  .filters button[aria-pressed="true"]{background:var(--panel-2);color:var(--ink)}
+  .filters button .n{font-family:var(--mono);font-size:10px;color:var(--faint);margin-left:5px}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:12px}
+  .card{background:linear-gradient(180deg,var(--panel),var(--bg-2));border:1px solid var(--line);border-radius:var(--r);padding:15px 16px 13px;transition:border-color .18s}
+  .card:hover{border-color:var(--line-2)} .card.hl{border-color:var(--pl-cyan);box-shadow:0 0 0 1px var(--pl-cyan)}
+  .card.edge-actionable{border-left:3px solid var(--pl-green)} .card.cold{border-left:3px solid var(--pl-pink)}
+  .card-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+  .fixture{display:flex;align-items:center;gap:9px;min-width:0}
+  .crest{width:31px;height:31px;border-radius:8px;display:grid;place-items:center;font-family:var(--mono);font-weight:700;font-size:10.5px;color:#fff;flex:none;text-shadow:0 1px 2px rgba(0,0,0,.6);border:1px solid rgba(255,255,255,.2)}
+  .teams{font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .teams .v{color:var(--faint);font-weight:500;margin:0 5px}
+  .topright{display:flex;align-items:center;gap:7px;flex:none}
+  .conf{font-family:var(--mono);font-size:9px;font-weight:700;padding:3px 7px;border-radius:6px;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}
+  .conf.high{background:rgba(0,255,135,.15);color:var(--pl-green)} .conf.medium{background:rgba(255,200,60,.16);color:var(--amber)} .conf.low{background:rgba(233,0,82,.16);color:#FF6B9E}
+  .iconbtn{background:transparent;border:0;cursor:pointer;color:var(--faint);font-size:15px;padding:2px;line-height:1}
+  .iconbtn:hover{color:var(--ink)} .iconbtn.on{color:var(--amber)}
+  .kickline{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin:-4px 0 9px;display:flex;justify-content:space-between;gap:10px}
+  .kickline .res{color:var(--pl-green);font-weight:700;font-size:13px}
+  .prob-bar{display:flex;height:23px;border-radius:7px;overflow:hidden;border:1px solid var(--line);gap:2px;background:var(--line)}
+  .seg{display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10.5px;font-weight:700;min-width:22px}
+  .seg.h{background:var(--pl-green);color:#05231A} .seg.d{background:#6B4F76;color:var(--ink)} .seg.a{background:var(--pl-cyan);color:#04262B}
+  .mrow{display:flex;justify-content:space-between;margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--muted)} .mrow b{color:var(--ink)}
+  .mkt-bar{display:flex;height:5px;border-radius:3px;overflow:hidden;gap:2px;background:var(--line);margin-top:5px;opacity:.7}
+  .lines{display:grid;grid-template-columns:auto auto 1fr;gap:12px;align-items:center;border-top:1px solid var(--line);padding-top:10px;margin-top:10px}
+  .lb .lbl{font-family:var(--mono);font-size:8.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-bottom:3px}
+  .lb .big{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pl-green)}
+  .lb .odds{font-family:var(--mono);font-size:11.5px;color:var(--muted)} .lb .odds b{color:var(--ink)}
+  .edgebox{justify-self:end;text-align:right;border-radius:10px;padding:6px 10px;min-width:108px;border:1px solid var(--line)}
+  .edgebox.actionable{border-color:rgba(0,255,135,.45);background:rgba(0,255,135,.09)}
+  .edgebox.watch{border-color:rgba(255,200,60,.45);background:rgba(255,200,60,.08)}
+  .edgebox.low,.edgebox.none{background:transparent}
+  .edgebox .l{font-family:var(--mono);font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+  .edgebox.actionable .l{color:var(--pl-green)} .edgebox.watch .l{color:var(--amber)}
+  .edgebox .v{font-family:var(--mono);font-size:15px;font-weight:700;margin-top:2px}
+  .edgebox.actionable .v{color:var(--pl-green)} .edgebox.watch .v{color:var(--amber)} .edgebox.low .v{color:var(--muted);font-size:13px} .edgebox.none .v{color:var(--muted);font-size:11.5px;font-weight:500}
+  .edgebox .s{font-size:9px;color:var(--muted)}
+  .extras{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px;align-items:center}
+  .chip{display:flex;gap:6px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:5px 9px;font-size:11px}
+  .chip .k{font-family:var(--mono);font-size:7.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)} .chip .val{font-weight:600;font-size:11.5px}
+  .chip .pct{font-family:var(--mono);color:var(--pl-cyan);font-size:10px}
+  .chip.out{border-color:rgba(233,0,82,.4);background:rgba(233,0,82,.08)} .chip.out .k{color:var(--pl-pink)}
+  .whybtn{margin-left:auto;background:transparent;border:1px solid var(--line-2);color:var(--muted);border-radius:8px;padding:5px 11px;font-size:11.5px;font-weight:600;cursor:pointer}
+  .whybtn:hover{color:var(--ink);border-color:var(--line-2)}
+  .why{margin-top:10px;border-top:1px dashed var(--line);padding-top:10px;display:none}
+  .why.open{display:block}
+  .why .wf{display:flex;justify-content:space-between;gap:12px;font-size:12px;padding:3px 0}
+  .why .wf .k{color:var(--faint)} .why .wf .v{font-family:var(--mono);text-align:right;color:var(--ink)}
+  .why .cr{margin-top:8px;font-size:11px;color:var(--amber);font-family:var(--mono)}
+
+  /* team news */
+  .stale{font-family:var(--mono);font-size:11.5px;color:var(--amber);background:rgba(255,200,60,.09);border:1px solid rgba(255,200,60,.3);border-radius:11px;padding:11px 14px;margin-bottom:14px;line-height:1.6}
+  .newsgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+  .ncard{display:flex;gap:11px;align-items:flex-start;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:11px 13px}
+  .flag{width:8px;height:8px;border-radius:50%;margin-top:5px;flex:none}
+  .flag.out{background:var(--pl-pink)} .flag.doubt{background:var(--amber)} .flag.back{background:var(--pl-green)}
+  .ncard .who{font-weight:700;font-size:13px} .ncard .tm{font-family:var(--mono);font-size:9px;color:var(--faint)}
+  .ncard .what{color:var(--muted);font-size:11.5px;margin-top:3px} .ncard .added{font-family:var(--mono);font-size:9px;color:var(--faint);margin-top:3px}
+
+  /* strength + fantasy */
+  .split{display:grid;grid-template-columns:1fr 330px;gap:18px;align-items:start}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:15px 16px}
+  .panel h3{font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;margin:0 0 4px}
+  .panel .hint{font-size:11.5px;color:var(--muted);margin:0 0 12px}
+  .srow{display:grid;grid-template-columns:20px 118px 1fr 48px;gap:9px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+  .srow:last-child{border-bottom:none}
+  .srow .rk{font-family:var(--mono);font-size:11px;color:var(--faint);text-align:right}
+  .srow .nm{display:flex;align-items:center;gap:7px;min-width:0} .srow .sw{width:11px;height:11px;border-radius:3px;flex:none;border:1px solid rgba(255,255,255,.25)}
+  .srow .tn{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .srow .prov{font-family:var(--mono);font-size:7.5px;color:var(--amber);background:rgba(255,200,60,.12);padding:2px 5px;border-radius:5px}
+  .track{background:rgba(255,255,255,.06);border-radius:6px;height:15px;position:relative;overflow:hidden}
+  .track i{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,var(--pl-cyan),var(--pl-green));border-radius:6px}
+  .track.p i{background:linear-gradient(90deg,rgba(255,200,60,.5),var(--amber))}
+  .track .ix{position:absolute;right:6px;top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:10px;font-weight:700}
+  .srow .pts{font-family:var(--mono);font-size:12.5px;color:var(--pl-cyan);text-align:right;font-weight:700}
+  .fantasy{display:flex;flex-direction:column;gap:16px}
+  .prow{display:flex;align-items:center;justify-content:space-between;gap:9px;padding:7px 0;border-bottom:1px solid var(--line);font-size:12px}
+  .prow:last-child{border-bottom:none}
+  .pos{font-family:var(--mono);font-size:8px;font-weight:700;padding:3px 6px;border-radius:5px}
+  .pos.GKP{background:rgba(4,245,255,.15);color:var(--pl-cyan)} .pos.DEF{background:rgba(0,255,135,.14);color:var(--pl-green)} .pos.MID{background:rgba(233,0,82,.16);color:#FF6B9E} .pos.FWD{background:rgba(255,200,60,.16);color:var(--amber)}
+  .prow .nm{font-weight:600} .prow .tm{font-family:var(--mono);font-size:9px;color:var(--faint)} .prow .rt{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--pl-green)}
+
+  /* backtest */
+  .bt-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin-bottom:18px}
+  .bt-tile{background:var(--bg-2);padding:14px 16px}
+  .bt-tile .lbl{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+  .bt-tile .val{font-family:var(--mono);font-size:24px;font-weight:700;margin-top:5px;color:var(--pl-green)}
+  .bt-tile .sub{font-size:10.5px;color:var(--muted);margin-top:2px}
+  .bt-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px} @media(max-width:820px){.bt-grid{grid-template-columns:1fr}}
+  figure{margin:0;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:15px 16px}
+  figure h4{margin:0 0 3px;font-size:12.5px;font-weight:800} figure p{margin:0 0 12px;font-size:11px;color:var(--muted)}
+  svg{display:block;width:100%;height:auto;overflow:visible} .grid line{stroke:var(--line);stroke-width:1} .axis text{fill:var(--faint);font-size:10px;font-family:var(--mono)}
+  .cmp{display:flex;flex-direction:column;gap:9px} .cmp .row{display:grid;grid-template-columns:96px 1fr 52px;gap:9px;align-items:center;font-size:12px}
+  .cmp .bar{height:16px;border-radius:5px;background:var(--panel-2);overflow:hidden} .cmp .bar i{display:block;height:100%;border-radius:5px}
+  .cmp .lab{font-weight:600} .cmp .num{font-family:var(--mono);text-align:right;font-weight:700}
+  .gtab{width:100%;border-collapse:collapse;font-size:12px} .gtab th,.gtab td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;font-family:var(--mono)} .gtab th:first-child,.gtab td:first-child{text-align:left}
+  .gtab th{color:var(--faint);font-size:9.5px;text-transform:uppercase;letter-spacing:.06em}
+
+  /* FPL pitch */
+  .pitchpanel{padding:0;overflow:hidden}
+  .pitchhead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 16px}
+  .pitchhead .t{font-size:15px;font-weight:800}
+  .pitchhead .m{font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap}
+  .pitchhead .m b{color:var(--pl-green)}
+  .tgw{display:flex;align-items:center;gap:6px}
+  .tgw button{background:var(--panel-2);border:1px solid var(--line-2);color:var(--ink);border-radius:8px;width:28px;height:28px;cursor:pointer}
+  .tgw button:disabled{opacity:.3;cursor:default}
+  .tgw .lab{font-family:var(--mono);font-size:12px;font-weight:700;min-width:96px;text-align:center}
+  .pitch{background:
+      linear-gradient(0deg,rgba(0,255,135,.05),rgba(0,255,135,.05)),
+      repeating-linear-gradient(0deg,#0e3b28,#0e3b28 46px,#124a32 46px,#124a32 92px);
+    border-top:1px solid var(--line);padding:20px 8px 10px;display:flex;flex-direction:column;gap:16px}
+  .prow2{display:flex;justify-content:center;gap:clamp(6px,2vw,26px);flex-wrap:wrap}
+  .plr{width:clamp(64px,15vw,88px);text-align:center;position:relative}
+  .jersey{height:40px;border-radius:8px 8px 10px 10px;display:grid;place-items:center;font-family:var(--mono);font-weight:800;font-size:12px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.7);border:1px solid rgba(255,255,255,.35);box-shadow:0 3px 8px rgba(0,0,0,.35);margin:0 auto;width:46px}
+  .capbadge{position:absolute;top:-6px;right:calc(50% - 30px);width:17px;height:17px;border-radius:50%;background:var(--ink);color:var(--bg);font-size:10px;font-weight:800;display:grid;place-items:center;border:1px solid var(--bg)}
+  .capbadge.v{background:var(--muted)}
+  .pname{font-size:11.5px;font-weight:700;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:rgba(0,0,0,.35);border-radius:5px 5px 0 0;padding:2px 3px}
+  .pfix{font-family:var(--mono);font-size:9px;color:#cdeede;background:rgba(0,0,0,.45);padding:2px 3px}
+  .pproj{font-family:var(--mono);font-size:9.5px;font-weight:700;color:#031;background:var(--pl-green);border-radius:0 0 5px 5px;padding:1px 3px}
+  .benchbar{background:var(--panel);border-top:1px solid var(--line);padding:11px 8px}
+  .benchbar .bl{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);text-align:center;margin-bottom:8px}
+  /* Kalshi strip under each fixture */
+  .kstrip{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);
+    padding:9px 0 2px;margin-top:9px;font-family:var(--mono);font-size:11px}
+  .kstrip .klab{font-weight:800;letter-spacing:.05em;color:var(--pl-cyan)}
+  .kstrip .kq{color:var(--muted)} .kstrip .kq b{color:var(--ink)}
+  .kstrip .kvig{color:var(--faint)}
+  .kstrip a.klink{margin-left:auto;color:var(--pl-cyan);text-decoration:none;font-weight:700;
+    border:1px solid var(--line-2);border-radius:7px;padding:4px 9px}
+  .kstrip a.klink:hover{background:var(--panel-2);text-decoration:underline}
+  .kbadge{font-size:9.5px;font-weight:800;padding:2px 7px;border-radius:6px;text-transform:uppercase;letter-spacing:.05em}
+  .kbadge.candidate{background:rgba(0,255,135,.16);color:var(--pl-green)}
+  .kbadge.watch{background:rgba(255,200,60,.16);color:var(--amber)}
+  .kbadge.thin{background:rgba(233,0,82,.14);color:#FF6B9E}
+  .ktab{width:100%;border-collapse:collapse;font-size:12px;font-family:var(--mono)}
+  .ktab th,.ktab td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right}
+  .ktab th:first-child,.ktab td:first-child{text-align:left;font-family:var(--sans);font-weight:600}
+  .ktab th{color:var(--faint);font-size:9.5px;text-transform:uppercase;letter-spacing:.05em}
+  .ktab td.pos{color:var(--pl-green)} .ktab td.neg{color:var(--muted)}
+  .ktab td small{color:var(--faint)}
+  .bt-tile .val.pos{color:var(--pl-green)} .bt-tile .val.neg{color:var(--amber)}
+  .kbadge{background:rgba(255,255,255,.07);color:var(--muted)}
+  /* news wire (trading-terminal) */
+  .ticker-wrap{overflow:hidden;border:1px solid var(--line);border-radius:10px;background:var(--panel);margin-bottom:16px;position:relative}
+  .ticker-wrap::before{content:"LIVE";position:absolute;left:0;top:0;bottom:0;z-index:2;display:flex;align-items:center;padding:0 10px;font-family:var(--mono);font-size:10px;font-weight:800;letter-spacing:.1em;color:var(--pl-green);background:var(--panel);border-right:1px solid var(--line)}
+  .ticker{display:inline-flex;gap:26px;white-space:nowrap;padding:9px 0 9px 60px;animation:tick 90s linear infinite;will-change:transform}
+  .ticker:hover{animation-play-state:paused}
+  .ticker a,.ticker span.ti{font-family:var(--mono);font-size:12px;color:var(--muted);text-decoration:none;display:inline-flex;gap:7px;align-items:center}
+  .ticker a:hover{color:var(--ink)}
+  .ticker .dotf{width:6px;height:6px;border-radius:50%;flex:none}
+  .ticker .dotf.out{background:var(--pl-pink)} .ticker .dotf.doubt{background:var(--amber)} .ticker .dotf.back{background:var(--pl-green)}
+  .ticker b{color:var(--ink);font-weight:700}
+  @keyframes tick{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+  .wire{display:flex;flex-direction:column;gap:8px}
+  .wire-row{display:grid;grid-template-columns:8px 1fr auto;gap:11px;align-items:start;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+  .wire-row .who{font-weight:700;font-size:13px} .wire-row .tm{font-family:var(--mono);font-size:9px;color:var(--faint)}
+  .wire-row .what{color:var(--muted);font-size:12px;margin-top:2px}
+  .wire-row .meta{text-align:right;font-family:var(--mono);font-size:10px;color:var(--faint);white-space:nowrap}
+  .wire-row a.src{color:var(--pl-cyan);text-decoration:none;font-weight:600} .wire-row a.src:hover{text-decoration:underline}
+  .wire-row .nosrc{color:var(--faint)}
+  /* locked fantasy team + forward test */
+  .locked-team{padding:34px 18px;text-align:center;color:var(--muted)}
+  .locked-team .lk{font-size:34px;margin-bottom:6px}
+  .locked-team h4{color:var(--ink);margin:0 0 6px;font-size:17px}
+  .locked-team .cd{font-family:var(--mono);color:var(--pl-cyan);font-size:13px;margin-top:8px}
+  .fwd-table{width:100%;border-collapse:collapse;font-size:12.5px}
+  .fwd-table th,.fwd-table td{padding:7px 9px;border-bottom:1px solid var(--line);text-align:right;font-family:var(--mono)}
+  .fwd-table th:first-child,.fwd-table td:first-child{text-align:left}
+  .fwd-table th{color:var(--faint);font-size:9.5px;text-transform:uppercase;letter-spacing:.05em}
+  .fwd-pending{color:var(--faint)}
+  footer{border-top:1px solid var(--line);padding:16px 0 40px;margin-top:16px}
+  .note{font-family:var(--mono);font-size:10.5px;color:var(--faint);line-height:1.7} .note b{color:var(--pl-cyan)}
+  #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--pl-green);color:var(--bg);font-weight:700;font-size:13px;padding:9px 16px;border-radius:10px;opacity:0;transition:opacity .2s;z-index:50;pointer-events:none}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+  :focus-visible{outline:2px solid var(--pl-cyan);outline-offset:2px;border-radius:6px}
+  @media(max-width:820px){.split{grid-template-columns:1fr}.cards{grid-template-columns:1fr}.srow{grid-template-columns:18px 96px 1fr 44px}}
+</style>
+<link rel="stylesheet" href="minimal.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap topbar-in">
+    <div class="brand"><span class="dot" aria-hidden="true"></span><span class="brand-name">FLOODLIT</span><small>model desk</small></div>
+    <nav class="tabs" id="tabs" aria-label="Dashboard sections" role="tablist">
+      <button type="button" id="tab-games" role="tab" data-view="games" aria-controls="view-games" aria-selected="true">Games</button>
+      <button type="button" id="tab-news" role="tab" data-view="news" aria-controls="view-news" aria-selected="false">Team News</button>
+      <button type="button" id="tab-strength" role="tab" data-view="strength" aria-controls="view-strength" aria-selected="false">Strength &amp; Fantasy</button>
+      <button type="button" id="tab-backtest" role="tab" data-view="backtest" aria-controls="view-backtest" aria-selected="false">Backtest</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="view active" id="view-games" role="tabpanel" aria-labelledby="tab-games">
+    <div class="vhead">
+      <div><h1>EPL <em>All In One</em> Terminal</h1><p id="gamesSub"></p></div>
+      <div class="gwnav"><button id="prev" aria-label="Previous matchweek">&#8249;</button><select id="gwSel" aria-label="Matchweek"></select><button id="next" aria-label="Next matchweek">&#8250;</button></div>
+    </div>
+    <div class="rule"></div>
+    <div class="banner" id="gamesBanner"></div>
+    <div class="filters" id="gamesFilters"></div>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <section class="view" id="view-news" role="tabpanel" aria-labelledby="tab-news">
+    <div class="vhead"><div><h1>News <em>wire</em></h1><p>Live injuries, doubts and suspensions straight from the FPL API &mdash; newest first, with the club/source link where FPL provides one.</p></div></div>
+    <div class="rule"></div><div id="staleWarn"></div>
+    <div class="ticker-wrap"><div class="ticker" id="ticker"></div></div>
+    <div class="filters" id="newsFilters"></div>
+    <div class="wire" id="newsGrid"></div>
+  </section>
+
+  <section class="view" id="view-strength" role="tabpanel" aria-labelledby="tab-strength">
+    <div class="vhead"><div><h1>Fantasy, <em>on demand</em>.</h1><p>A matchweek squad, recommendations, and season rankings &mdash; revealed only when you need them.</p></div></div>
+    <div class="rule"></div>
+    <div class="fantasy-overview">
+      <div>
+        <p class="eyebrow">Matchweek planner</p>
+        <h2 id="teamTitle">Matchweek team</h2>
+        <p class="fantasy-intro">Choose a view below. The squad and model tables stay tucked away until opened.</p>
+      </div>
+      <div class="tgw"><button type="button" id="tPrev" aria-label="Previous matchweek">&#8249;</button><span class="lab" id="tLab">MW 1</span><button type="button" id="tNext" aria-label="Next matchweek">&#8250;</button></div>
+    </div>
+    <div class="disclosure-list fantasy-disclosures" id="fantasyDisclosures">
+      <section class="disclosure-item">
+        <button type="button" class="disclosure-trigger" aria-expanded="false" aria-controls="fantasy-overview-panel">
+          <span><b>Formation &amp; projection</b><small>Shape, spend, captain, and projected points</small></span><i aria-hidden="true"></i>
+        </button>
+        <div class="disclosure-panel" id="fantasy-overview-panel" hidden><div class="fantasy-meta" id="teamMeta"></div></div>
+      </section>
+      <section class="disclosure-item">
+        <button type="button" class="disclosure-trigger" aria-expanded="false" aria-controls="fantasy-xi-panel">
+          <span><b>Starting XI</b><small>The model-selected team on the pitch</small></span><i aria-hidden="true"></i>
+        </button>
+        <div class="disclosure-panel flush-panel" id="fantasy-xi-panel" hidden><div class="pitch" id="pitch"></div></div>
+      </section>
+      <section class="disclosure-item">
+        <button type="button" class="disclosure-trigger" aria-expanded="false" aria-controls="fantasy-bench-panel">
+          <span><b>Bench</b><small>Four substitutes in recommended order</small></span><i aria-hidden="true"></i>
+        </button>
+        <div class="disclosure-panel" id="fantasy-bench-panel" hidden><div class="prow2 bench-list" id="bench"></div></div>
+      </section>
+      <section class="disclosure-item">
+        <button type="button" class="disclosure-trigger" aria-expanded="false" aria-controls="fantasy-picks-panel">
+          <span><b>Recommended picks</b><small>Best projected performers for a selected matchweek</small></span><i aria-hidden="true"></i>
+        </button>
+        <div class="disclosure-panel" id="fantasy-picks-panel" hidden>
+          <div class="panel-heading-row"><div><h3>Who to pick</h3><p id="fplHint">Best projected FPL performers this matchweek, from simulating the fixtures.</p></div><label class="field-label">Matchweek<select id="pickGw"></select></label></div>
+          <div id="picks"></div>
+        </div>
+      </section>
+      <section class="disclosure-item">
+        <button type="button" class="disclosure-trigger" aria-expanded="false" aria-controls="fantasy-form-panel">
+          <span><b>Form &amp; quality</b><small>Who is hot, and whether it is real</small></span><i aria-hidden="true"></i>
+        </button>
+        <div class="disclosure-panel" id="fantasy-form-panel" hidden><div id="formtbl"></div></div>
+      </section>
+      <section class="disclosure-item">
+        <button type="button" class="disclosure-trigger" aria-expanded="false" aria-controls="fantasy-transfers-panel">
+          <span><b>Transfers</b><small>What 1 free transfer actually buys you this week</small></span><i aria-hidden="true"></i>
+        </button>
+        <div class="disclosure-panel" id="fantasy-transfers-panel" hidden><div id="transfers"></div></div>
+      </section>
+      <section class="disclosure-item">
+        <button type="button" class="disclosure-trigger" aria-expanded="false" aria-controls="fantasy-chips-panel">
+          <span><b>Chips</b><small>Bench Boost, Triple Captain, Wildcard, Free Hit</small></span><i aria-hidden="true"></i>
+        </button>
+        <div class="disclosure-panel" id="fantasy-chips-panel" hidden><div id="chips"></div></div>
+      </section>
+      <section class="disclosure-item">
+        <button type="button" class="disclosure-trigger" aria-expanded="false" aria-controls="fantasy-forward-panel">
+          <span><b>Forward test</b><small>Projected vs actual FPL points, graded each matchweek</small></span><i aria-hidden="true"></i>
+        </button>
+        <div class="disclosure-panel" id="fantasy-forward-panel" hidden><div id="forward"></div></div>
+      </section>
+      <section class="disclosure-item">
+        <button type="button" class="disclosure-trigger" aria-expanded="false" aria-controls="fantasy-strength-panel">
+          <span><b>Power rankings</b><small>Projected points across all 2026/27 clubs</small></span><i aria-hidden="true"></i>
+        </button>
+        <div class="disclosure-panel" id="fantasy-strength-panel" hidden><p class="panel-hint" id="strengthHint"></p><div id="strength"></div></div>
+      </section>
+      <section class="disclosure-item">
+        <button type="button" class="disclosure-trigger" aria-expanded="false" aria-controls="fantasy-players-panel">
+          <span><b>Top-rated players</b><small>Recency-weighted model ratings</small></span><i aria-hidden="true"></i>
+        </button>
+        <div class="disclosure-panel" id="fantasy-players-panel" hidden><div id="players"></div></div>
+      </section>
+    </div>
+  </section>
+
+  <section class="view" id="view-backtest" role="tabpanel" aria-labelledby="tab-backtest">
+    <div class="vhead"><div><h1>Backtest <em>&amp; evidence</em></h1><p id="btSub"></p></div></div>
+    <div class="rule"></div>
+    <div id="btBody"></div>
+  </section>
+
+  <footer><p class="note"><b>SOURCES:</b> <span id="srcNote"></span> &mdash; analytical view only, not a recommendation to bet.</p></footer>
+</main>
+<div id="toast"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const el=h=>{const t=document.createElement('template');t.innerHTML=h.trim();return t.content.firstChild};
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const SVG="http://www.w3.org/2000/svg", mk=(n,a={})=>{const e=document.createElementNS(SVG,n);for(const k in a)e.setAttribute(k,a[k]);return e;};
+let DATA=null,gw=1,gFilter='all',newsFilter='all',teamGw=null;
+const openMatches=new Set(),openMatchSections=new Map();
+const WATCH_KEY='floodlit_watch';
+const watch=()=>{try{return JSON.parse(localStorage.getItem(WATCH_KEY))||[]}catch(e){return[]}};
+const setWatch=a=>localStorage.setItem(WATCH_KEY,JSON.stringify(a));
+function toggleWatch(id){const w=watch();const i=w.indexOf(id);if(i<0)w.push(id);else w.splice(i,1);setWatch(w);renderWeek();}
+function toast(m){const t=$('toast');t.textContent=m;t.style.opacity=1;setTimeout(()=>t.style.opacity=0,1400);}
+
+function setDisclosure(trigger,open){
+  const panel=$(trigger.getAttribute('aria-controls'));
+  trigger.setAttribute('aria-expanded',String(open));
+  trigger.closest('.disclosure-item')?.classList.toggle('open',open);
+  if(panel)panel.hidden=!open;
+}
+function wireDisclosureGroup(root,{single=true,onChange=null}={}){
+  if(!root||root.dataset.wired==='true')return;
+  root.dataset.wired='true';
+  const triggers=[...root.querySelectorAll('.disclosure-trigger')];
+  triggers.forEach(trigger=>trigger.addEventListener('click',()=>{
+    const opening=trigger.getAttribute('aria-expanded')!=='true';
+    if(opening&&single)triggers.filter(other=>other!==trigger).forEach(other=>setDisclosure(other,false));
+    setDisclosure(trigger,opening);
+    if(onChange)onChange(trigger,opening);
+  }));
+}
+
+function ago(iso){if(!iso)return'';const d=new Date(iso);if(isNaN(d))return esc(iso);const h=(Date.now()-d)/3.6e6;
+  if(h<1)return Math.max(1,Math.round(h*60))+'m ago';if(h<48)return Math.round(h)+'h ago';return Math.round(h/24)+'d ago';}
+
+function showView(v){document.querySelectorAll('#tabs button').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.view===v)));
+  document.querySelectorAll('.view').forEach(s=>s.classList.toggle('active',s.id==='view-'+v));
+  if(v==='backtest')renderBacktest();}
+
+function renderFresh(){
+  $('fresh').replaceChildren(...DATA.sources.map(s=>el(
+    `<div class="fchip" title="${esc(s.rule)}"><span class="fd ${s.fresh?'ok':'stale'}"></span>
+      <span class="fn">${esc(s.name)}</span><span class="fa">${s.as_of?ago(s.as_of):'&mdash;'} &middot; ${esc(s.note)}</span></div>`)));
+}
+function renderGamesMeta(){
+  $('srcNote').textContent=DATA.meta.sources_line;
+  $('gamesSub').textContent=`${DATA.meta.season} \u00B7 real fixtures & odds from ESPN, priced against ${DATA.meta.model}. Confidence & edges gated by the backtest.`;
+  const bits=[];const m=DATA.meta;
+  if(m.priced<m.fixtures)bits.push(`<b>${m.priced} of ${m.fixtures} priced.</b> Books open nearer kickoff; unpriced cards show fair odds only.`);
+  if(m.cold_start&&m.cold_start.length)bits.push(`<b>${m.cold_start.join(' & ')}</b> are newly promoted with no rating history, so their cards are low-confidence and edges are downgraded.`);
+  $('gamesBanner').innerHTML=bits.join(' ');
+}
+function gCount(f){const w=watch();return DATA.weeks.find(x=>x.gw===gw).matches.filter(m=>pass(m,f,w)).length;}
+function pass(m,f,w){if(f==='edges')return m.edge&&m.edge.grade==='actionable';if(f==='high')return m.tier==='high';
+  if(f==='cold')return m.cold_start;if(f==='watch')return w.includes(m.id);return true;}
+function renderFilters(){
+  const F=[['all','All'],['edges','Value edges'],['high','High confidence'],['cold','Cold start'],['watch','Watchlist']];
+  $('gamesFilters').replaceChildren(...F.map(([k,lbl])=>{const b=el(`<button type="button" aria-pressed="${k===gFilter}">${lbl}<span class="n">${gCount(k)}</span></button>`);
+    b.addEventListener('click',()=>{gFilter=k;renderWeek();});return b;}));
+}
+function likelyOutcome(m){
+  const options=[
+    {label:`${m.home} win`,phrase:`${m.home} the edge`,short:'Home win',p:m.ph},
+    {label:'Draw',phrase:'a draw',short:'Draw',p:m.pd},
+    {label:`${m.away} win`,phrase:`${m.away} the edge`,short:'Away win',p:m.pa}
+  ];
+  return options.sort((a,b)=>b.p-a.p)[0];
+}
+function edgeStatus(m){
+  if(!m.edge)return m.mkt?{label:'No value edge',detail:'Model and market broadly agree',tone:'none'}:{label:'Awaiting market',detail:'Fair odds only',tone:'none'};
+  const label=m.edge.grade==='actionable'?'Value edge':m.edge.grade==='watch'?'Watch edge':'Low-confidence edge';
+  return {label,detail:`${m.edge.side} +${m.edge.ev}% @ ${m.edge.odds}`,tone:m.edge.grade};
+}
+function predictionExplanation(m){
+  const likely=likelyOutcome(m),edge=edgeStatus(m);
+  const confidence=m.tier==='high'?'high confidence':m.tier==='medium'?'moderate confidence':'limited confidence';
+  const market=m.edge?`The clearest price difference is ${m.edge.side} at ${m.edge.odds}, a projected ${m.edge.ev}% edge.`:(m.mkt?'The model is broadly aligned with the available market.':'No bookmaker line is available yet, so only fair odds are shown.');
+  return `The model gives ${likely.phrase} at ${likely.p}% and makes ${m.score} the most likely scoreline with ${confidence}. ${market}`;
+}
+function fallbackCrest(name,abbr,color){
+  return `<span class="crest" style="background:${esc(color)}" role="img" aria-label="${esc(name)} crest fallback">${esc(abbr)}</span>`;
+}
+function analysisSection(m,key,title,summary,body,open){
+  const triggerId=`${m.id}-${key}-trigger`,panelId=`${m.id}-${key}-panel`;
+  return `<section class="disclosure-item analysis-section ${open?'open':''}">
+    <button type="button" class="disclosure-trigger analysis-trigger" id="${triggerId}" data-section="${key}" aria-expanded="${open}" aria-controls="${panelId}">
+      <span><b>${title}</b><small>${summary}</small></span><i aria-hidden="true"></i>
+    </button>
+    <div class="disclosure-panel analysis-panel" id="${panelId}" role="region" aria-labelledby="${triggerId}" ${open?'':'hidden'}>${body}</div>
+  </section>`;
+}
+function factorRows(m){
+  return (m.why?.factors||[]).map(f=>`<div class="fact-row"><dt>${esc(f.k)}</dt><dd>${esc(f.v)}</dd></div>`).join('');
+}
+function scorerColumn(label,players){
+  const rows=(players||[]).map(p=>`<li><span>${esc(p.n)}</span><b>${p.p}%</b></li>`).join('');
+  return `<div class="scorer-group"><h5>${esc(label)} scorers</h5>${rows?`<ol>${rows}</ol>`:'<p class="empty-copy">No scorer projection.</p>'}</div>`;
+}
+function newsRows(items){
+  if(!items.length)return '<p class="empty-copy">No availability concerns in the current feed.</p>';
+  return `<div class="availability-list">${items.map(n=>`<article class="availability-row">
+    <span class="flag ${esc(n.flag)}" aria-hidden="true"></span>
+    <div><h5>${esc(n.who)} <small>${esc(n.team)}</small></h5><p>${esc(n.what)}</p>${n.added?`<time>Updated ${esc(n.added)}</time>`:''}</div>
+    <strong>${esc(n.flag)}</strong>
+  </article>`).join('')}</div>`;
+}
+function kalshiStrip(m){
+  const k=m.kalshi; if(!k)return '';
+  const e=k.entry;
+  const badge=k.thin?'<span class="kbadge thin">thin market</span>'
+    :(e&&e.grade==='candidate'?`<span class="kbadge candidate">entry ${esc(e.side)} +${e.ev}%</span>`
+    :(e&&e.grade==='watch'?`<span class="kbadge watch">watch ${esc(e.side)} +${e.ev}%</span>`:''));
+  const q=k.mid&&k.mid.h!=null?`<span class="kq">mid <b>${k.mid.h}</b>/<b>${k.mid.d}</b>/<b>${k.mid.a}</b>&cent;</span>`:'';
+  return `<div class="kstrip"><span class="klab">KALSHI</span>${q}
+    <span class="kvig">vig ${k.vig!=null?k.vig+'%':'&mdash;'} &middot; vol ${k.vol.toLocaleString()}</span>${badge}
+    <a class="klink" href="${esc(k.url)}" target="_blank" rel="noopener">Open market &#8599;</a></div>`;
+}
+function kalshiBody(m){
+  const k=m.kalshi;
+  if(!k)return '<p class="empty-copy">No Kalshi market for this fixture yet. Kalshi lists EPL games roughly a matchweek ahead.</p>';
+  const nm={h:m.home,d:'Draw',a:m.away};
+  const rows=k.rows.map(r=>`<tr><td>${esc(nm[r.leg])}</td><td>${r.model}%</td><td>${r.kalshi_mid!=null?r.kalshi_mid+'%':'&mdash;'}</td>
+    <td>${r.ask!=null?r.ask+'&cent;':'&mdash;'}</td>
+    <td class="${r.diff>0?'pos':'neg'}">${r.diff!=null?(r.diff>0?'+':'')+r.diff:'&mdash;'}</td>
+    <td class="${r.ev>0?'pos':'neg'}">${r.ev!=null?(r.ev>0?'+':'')+r.ev+'%':'&mdash;'}</td></tr>`).join('');
+  const e=k.entry;
+  const verdict=k.thin
+    ? `<b style="color:#FF6B9E">Thin market</b> &mdash; wide spread / low volume, so the mid is unreliable. No entry.`
+    : (e&&e.grade==='candidate'
+      ? `<b style="color:var(--pl-green)">Candidate entry: ${esc(e.side)} at ${e.ask}&cent;</b> &mdash; model ${e.model}% vs Kalshi ${e.kalshi}%, +${e.ev}% expected value. Liquid market, high-confidence fixture.`
+      : (e&&e.grade==='watch'
+        ? `<b style="color:var(--amber)">Watch only: ${esc(e.side)} +${e.ev}%</b> &mdash; the disagreement is real but the fixture is low-confidence (promoted club or soft inputs), so it is not promoted to an entry.`
+        : `Model and Kalshi broadly agree &mdash; no entry.`));
+  return `<table class="ktab"><thead><tr><th>Outcome</th><th>Model</th><th>Kalshi mid</th><th>Ask</th><th>Diff</th><th>EV</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="human-summary" style="margin-top:10px">${verdict}</p>
+    <p class="panel-hint">Kalshi is an exchange: the price in cents <i>is</i> the implied probability, and you pay the ask to buy YES. Overround here is ${k.vig!=null?k.vig+'%':'n/a'} vs ~6.7% at a sportsbook, so a disagreement is less likely to be vig. <a class="src" href="${esc(k.url)}" target="_blank" rel="noopener">Open the market on Kalshi &#8599;</a></p>
+    <p class="panel-hint" style="color:var(--amber)">Backtest caveat: out-of-sample the model trails the closing line (RPS 0.2061 vs 0.1953). When it disagrees with a sharp market, history says the market is more often right &mdash; treat these as candidates to investigate, not validated edges.</p>`;
+}
+function propsBody(m){
+  const pr=m.props;
+  if(!pr||!pr.rows.length)return '<p class="empty-copy">No prop prices for this fixture.</p>';
+  const rows=pr.rows.map(p=>{
+    const quote=p.ask!=null?`${p.bid}&ndash;${p.ask}&cent;`:'<span class="nosrc">not listed</span>';
+    const ev=p.ask==null?'&mdash;':(p.thin?'<span class="nosrc">thin</span>':`<span class="${p.ev>0?'pos':'neg'}">${p.ev>0?'+':''}${p.ev}%</span>`);
+    return `<tr><td>${esc(p.label)}</td><td>${p.model}%</td><td>${quote}</td><td>${ev}</td></tr>`;
+  }).join('');
+  const note=pr.quoted
+    ? (pr.best?`<b style="color:var(--pl-green)">Best prop: ${esc(pr.best.label)} +${pr.best.ev}% at ${pr.best.ask}&cent;</b>`
+              :`Kalshi has quoted ${pr.quoted} of these, but every quote is currently <b>thin</b> (no volume, wide spread), so no entry is flagged. They tighten closer to kickoff.`)
+    : `Kalshi has not listed props for this fixture yet &mdash; the model prices are shown so you can compare the moment they open.`;
+  return `<table class="ktab"><thead><tr><th>Market</th><th>Model</th><th>Kalshi</th><th>EV</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="human-summary" style="margin-top:10px">${note}</p>
+    <p class="panel-hint">Every one of these comes from the <b>same Dixon-Coles score matrix</b> that prices the 1X2 &mdash; BTTS is P(both&nbsp;&ge;1), totals are P(sum&nbsp;&gt;&nbsp;line), spreads are P(margin&nbsp;&gt;&nbsp;line). No extra model.${pr.url?` <a class="src" href="${esc(pr.url)}" target="_blank" rel="noopener">Open props on Kalshi &#8599;</a>`:''}</p>`;
+}
+function cornersBody(m){
+  const c=m.corners; if(!c)return '<p class="empty-copy">No corner model for this fixture.</p>';
+  const rows=n=>`<tr><td>${n}+ corners</td><td>${c.home_at_least[n]!=null?c.home_at_least[n]+'%':'\u2014'}</td>
+    <td>${c.away_at_least[n]!=null?c.away_at_least[n]+'%':'\u2014'}</td></tr>`;
+  const tot=[8,9,10,11,12].map(n=>`<tr><td>${n}+ total</td><td colspan="2">${c.total_at_least[n]!=null?c.total_at_least[n]+'%':'\u2014'}</td></tr>`).join('');
+  const act=c.actual?`<p class="human-summary">Actual: <b>${esc(m.home_abbr)} ${c.actual.h}</b> \u2013 <b>${esc(m.away_abbr)} ${c.actual.a}</b> (${c.actual.h+c.actual.a} total) vs predicted ${c.xc_home} \u2013 ${c.xc_away} (${c.xc_total}).</p>`:'';
+  return `<div class="analysis-facts"><div><span>Expected ${esc(m.home_abbr)}</span><b>${c.xc_home}</b></div>
+      <div><span>Expected ${esc(m.away_abbr)}</span><b>${c.xc_away}</b></div>
+      <div><span>Expected total</span><b>${c.xc_total}</b></div></div>
+    <table class="ktab" style="margin-top:10px"><thead><tr><th>Market</th><th>${esc(m.home_abbr)}</th><th>${esc(m.away_abbr)}</th></tr></thead>
+    <tbody>${[4,5,6,7,8].map(rows).join('')}${tot}</tbody></table>${act}
+    <p class="panel-hint">Team corners are modelled from each club\u2019s last 30 matches and validate at
+      <b>MAE 2.21 vs 2.39 naive</b> (correlation 0.375) &mdash; real signal.
+      <span style="color:var(--amber)">Total corners validated at only +0.4% over naive (correlation 0.12), so those rows are shown for reference and are never treated as an edge.</span></p>`;
+}
+function renderMatchCard(m,watchlist,highlight){
+  const mk=m.mkt,starred=watchlist.includes(m.id),expanded=openMatches.has(m.id)||highlight===m.id;
+  if(highlight===m.id)openMatches.add(m.id);
+  const openSection=openMatchSections.get(m.id)||'quick';
+  const likely=likelyOutcome(m),edge=edgeStatus(m);
+  const marketProb=mk?{h:(mk.imp.h*100).toFixed(0),d:(mk.imp.d*100).toFixed(0),a:(mk.imp.a*100).toFixed(0)}:{h:'\u2014',d:'\u2014',a:'\u2014'};
+  const book=mk?mk.dec:{h:'\u2014',d:'\u2014',a:'\u2014'};
+  const quickBody=`<div class="quick-grid">
+      <div class="quick-stat"><span>Most likely result</span><b>${esc(likely.label)}</b><small>${likely.p}% model probability</small></div>
+      <div class="quick-stat"><span>Most likely score</span><b>${esc(m.score)}</b><small>only ${m.scorelines[0].p}% \u2014 xG ${esc(m.xg)}</small></div>
+      <div class="quick-stat"><span>Confidence</span><b class="status-text ${esc(m.tier)}">${esc(m.tier)}</b><small>${m.conf}/100</small></div>
+      <div class="quick-stat"><span>Value status</span><b class="status-text ${esc(edge.tone)}">${esc(edge.label)}</b><small>${esc(edge.detail)}</small></div>
+    </div><p class="human-summary">${esc(predictionExplanation(m))}</p>`;
+  const outcome=(label,model,market,fair,odds)=>`<div class="outcome-column"><h5>${esc(label)}</h5><dl>
+      <div><dt>Model</dt><dd>${model}%</dd></div><div><dt>Market</dt><dd>${market}${market==='\u2014'?'':'%'}</dd></div>
+      <div><dt>Fair odds</dt><dd>${fair}</dd></div><div><dt>Book odds</dt><dd>${odds}</dd></div>
+    </dl></div>`;
+  const oddsBody=`<div class="outcome-grid">
+      ${outcome(m.home,m.ph,marketProb.h,m.fair.h,book.h)}
+      ${outcome('Draw',m.pd,marketProb.d,m.fair.d,book.d)}
+      ${outcome(m.away,m.pa,marketProb.a,m.fair.a,book.a)}
+    </div><div class="market-foot"><span>Provider <b>${mk?esc(mk.provider):'Awaiting book'}</b></span><span>Vig / overround <b>${mk?mk.overround+'%':'\u2014'}</b></span></div>`;
+  const penalties=(m.why?.conf_reasons||[]);
+  const modelBody=`<div class="analysis-facts">
+      <div><span>Most likely score</span><b>${esc(m.score)} <small style="opacity:.7">${m.scorelines[0].p}%</small></b></div><div><span>Expected goals</span><b>${esc(m.xg)}</b></div>
+      <div><span>Confidence</span><b>${m.conf}/100</b></div><div><span>Cold start</span><b>${m.cold_start?'Yes':'No'}</b></div>
+    </div><dl class="factor-list">${factorRows(m)}</dl>
+    <p class="panel-hint">Scorelines are genuinely flat: 1-1 is the most common Premier League result (10.9% of matches) and the model gives it 11.9% on average, so it tops the ranking in most fixtures. The "most likely" score is wrong ~88% of the time by design \u2014 read the expected goals and the win probabilities, not the single scoreline.</p>
+    <div class="penalty-note ${penalties.length?'warn':''}"><b>${penalties.length?'Confidence penalties':'Confidence check'}</b><p>${penalties.length?penalties.map(esc).join('; '):'No confidence penalties applied.'}</p></div>`;
+  const allNews=[...(m.news?.h||[]),...(m.news?.a||[])];
+  const peopleBody=`<div class="scorer-columns">${scorerColumn(m.home,m.scorers?.h)}${scorerColumn(m.away,m.scorers?.a)}</div>
+    <div class="subsection-heading"><h5>Team availability</h5><span>${allNews.length} update${allNews.length===1?'':'s'}</span></div>${newsRows(allNews)}`;
+  const whyBody=`<p class="human-summary">${esc(predictionExplanation(m))}</p><dl class="factor-list">${factorRows(m)}</dl>
+    <div class="confidence-summary"><span>Confidence score</span><b>${m.conf}/100 \u00B7 ${esc(m.tier)}</b><p>${penalties.length?penalties.map(esc).join('; '):'No confidence penalties applied.'}</p></div>`;
+  const sections=[
+    analysisSection(m,'quick','Quick prediction',`${likely.short} \u00B7 ${m.score} (${m.scorelines[0].p}%) \u00B7 ${edge.label}`,quickBody,openSection==='quick'),
+    analysisSection(m,'odds','Probabilities & odds',`${m.ph}/${m.pd}/${m.pa}% model split`,oddsBody,openSection==='odds'),
+    analysisSection(m,'props','Props &mdash; BTTS, totals, spreads',(m.props?(m.props.best?`${esc(m.props.best.label)} +${m.props.best.ev}%`:(m.props.quoted?`${m.props.quoted} quoted &middot; all thin`:'model prices only')):'\u2014'),propsBody(m),openSection==='props'),
+    analysisSection(m,'corners','Corners',(m.corners?`${m.corners.xc_home} \u2013 ${m.corners.xc_away} expected`+(m.corners.actual?` \u00B7 actual ${m.corners.actual.h}\u2013${m.corners.actual.a}`:''):'\u2014'),cornersBody(m),openSection==='corners'),
+    analysisSection(m,'kalshi','Kalshi market',(m.kalshi?(m.kalshi.thin?'Thin market \u2014 no entry':(m.kalshi.entry&&m.kalshi.entry.grade!=='none'?`${esc(m.kalshi.entry.side)} +${m.kalshi.entry.ev}% vs Kalshi`:'Model agrees with Kalshi')):'No Kalshi market yet'),kalshiBody(m),openSection==='kalshi'),
+    analysisSection(m,'model','Model analysis',`xG ${m.xg} \u00B7 confidence ${m.conf}`,modelBody,openSection==='model'),
+    analysisSection(m,'people','Players & team news',`${allNews.length} availability update${allNews.length===1?'':'s'}`,peopleBody,openSection==='people'),
+    analysisSection(m,'why','Why this pick','Factors, confidence, and plain-English rationale',whyBody,openSection==='why')
+  ].join('');
+  const status=m.finished&&m.result?`${m.result} \u00B7 Full time`:m.venue;
+  const card=el(`<article class="fixture-card ${highlight===m.id?'hl':''}" data-id="${esc(m.id)}">
+    <div class="fixture-summary">
+      <div class="fixture-teams-list">
+        <div class="fixture-team">${fallbackCrest(m.home,m.home_abbr,m.home_color)}<strong>${esc(m.home)}</strong></div>
+        <div class="fixture-team">${fallbackCrest(m.away,m.away_abbr,m.away_color)}<strong>${esc(m.away)}</strong></div>
+      </div>
+      <div class="fixture-schedule"><time>${esc(m.time)}</time><span>${esc(status)}</span></div>
+      <div class="fixture-actions">
+        <button type="button" class="watch-button ${starred?'on':''}" aria-pressed="${starred}" aria-label="${starred?'Remove from':'Add to'} watchlist" title="Watchlist">${starred?'&#9733;':'&#9734;'}</button>
+        <button type="button" class="fixture-toggle" aria-expanded="${expanded}" aria-controls="${m.id}-analysis"><span>${expanded?'Hide prediction':'View prediction'}</span><i aria-hidden="true"></i></button>
+      </div>
+    </div>
+    ${kalshiStrip(m)}
+    <div class="fixture-analysis" id="${m.id}-analysis" ${expanded?'':'hidden'}>
+      <div class="analysis-toolbar"><span>${esc(m.home_abbr)} / ${esc(m.away_abbr)} analysis</span><button type="button" class="share-button" aria-label="Copy match link">Copy match link</button></div>
+      <div class="disclosure-list match-disclosures">${sections}</div>
+    </div>
+  </article>`);
+  const toggle=card.querySelector('.fixture-toggle'),analysis=card.querySelector('.fixture-analysis');
+  toggle.addEventListener('click',()=>{
+    const opening=toggle.getAttribute('aria-expanded')!=='true';
+    toggle.setAttribute('aria-expanded',String(opening));analysis.hidden=!opening;
+    toggle.querySelector('span').textContent=opening?'Hide prediction':'View prediction';
+    if(opening)openMatches.add(m.id);else openMatches.delete(m.id);
+  });
+  card.querySelector('.watch-button').addEventListener('click',()=>toggleWatch(m.id));
+  card.querySelector('.share-button').addEventListener('click',()=>{
+    const u=location.origin+location.pathname+`#gw=${gw}&m=${m.id}`;
+    (navigator.clipboard?navigator.clipboard.writeText(u):Promise.reject()).then(()=>toast('Match link copied')).catch(()=>toast(u));});
+  wireDisclosureGroup(card.querySelector('.match-disclosures'),{single:true,onChange:(trigger,opening)=>{
+    if(opening)openMatchSections.set(m.id,trigger.dataset.section);
+  }});
+  if(highlight===m.id)setTimeout(()=>card.scrollIntoView({block:'center'}),60);
+  return card;
+}
+function renderWeek(highlight){
+  const wk=DATA.weeks.find(w=>w.gw===gw),w=watch();
+  $('gwSel').value=String(gw);$('prev').disabled=gw<=1;$('next').disabled=gw>=DATA.weeks.length;
+  renderFilters();
+  location.hash=`gw=${gw}`+(gFilter!=='all'?`&f=${gFilter}`:'');
+  const rows=wk.matches.filter(m=>pass(m,gFilter,w));
+  $('cards').replaceChildren(...rows.map(m=>renderMatchCard(m,w,highlight)));
+  if(!rows.length)$('cards').innerHTML='<div class="empty-state">No fixtures match this filter.</div>';
+}
+
+function tickerItem(n){
+  const inner=`<span class="dotf ${esc(n.flag)}"></span><b>${esc(n.who)}</b> <span>${esc(n.team)}</span> &mdash; ${esc(n.what)}`;
+  return n.url?`<a href="${esc(n.url)}" target="_blank" rel="noopener">${inner}</a>`:`<span class="ti">${inner}</span>`;
+}
+function renderNews(){
+  const m=DATA.meta;
+  $('staleWarn').replaceChildren(...(m.fpl_stale?[el(`<div class="stale">FPL has not rolled over to ${esc(m.season)} yet &mdash; still serving ${esc(m.fpl_season)} (${esc(m.fpl_gw)}), so this news is end-of-last-season. It refreshes automatically when FPL flips.</div>`)]:[]));
+  // rotating ticker: duplicate the list so the marquee loops seamlessly
+  const tk=(DATA.ticker||DATA.news.slice(0,16));
+  $('ticker').innerHTML=tk.concat(tk).map(tickerItem).join('');
+  const counts={all:DATA.news.length,out:0,doubt:0,back:0};DATA.news.forEach(n=>counts[n.flag]=(counts[n.flag]||0)+1);
+  $('newsFilters').replaceChildren(...[['all','All'],['out','Out'],['doubt','Doubtful'],['back','Available*']].map(([k,l])=>{
+    const b=el(`<button type="button" aria-pressed="${k===newsFilter}">${l}<span class="n">${counts[k]||0}</span></button>`);b.addEventListener('click',()=>{newsFilter=k;renderNews();});return b;}));
+  $('newsGrid').replaceChildren(...DATA.news.filter(n=>newsFilter==='all'||n.flag===newsFilter).map(n=>el(
+    `<div class="wire-row"><span class="flag ${esc(n.flag)}"></span>
+      <div style="min-width:0"><div class="who">${esc(n.who)} <span class="tm">${esc(n.team)}</span></div><div class="what">${esc(n.what)}</div></div>
+      <div class="meta">${n.added?esc(n.added):''}<br>${n.url?`<a class="src" href="${esc(n.url)}" target="_blank" rel="noopener">source &#8599;</a>`:'<span class="nosrc">no link</span>'}</div>
+    </div>`)));
+}
+function textCol(hex){const h=hex.replace('#','');const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);return (r*299+g*587+b*114)/1000>150?'#111':'#fff';}
+function plrTile(s){
+  const cap=s.cap?'<span class="capbadge">C</span>':(s.vice?'<span class="capbadge v">V</span>':'');
+  return `<div class="plr">${cap}<div class="jersey" style="background:${esc(s.color)};color:${textCol(s.color)}">${esc(s.abbr)}</div>
+    <div class="pname">${esc(s.nm)}</div><div class="pfix">${esc(s.opp)} (${esc(s.ha)})</div><div class="pproj">${s.proj} pts</div></div>`;
+}
+function renderTeam(){
+  const t=DATA.team; const gw=DATA.active_gw; if(!t)return;
+  $('teamTitle').textContent=`Matchweek ${gw} team`;
+  $('tLab').textContent='MW '+gw;
+  $('tPrev').disabled=true; $('tNext').disabled=true;   // week-by-week: only the active GW exists
+  if(t.locked){
+    const rev=new Date(t.reveal_at), days=Math.max(0,Math.ceil((rev-Date.now())/86400000));
+    const revTxt=rev.toLocaleDateString(undefined,{weekday:'short',day:'numeric',month:'short'});
+    $('teamMeta').innerHTML=`<span style="color:var(--amber)">&#128274; locked</span><span>reveals ${revTxt}</span>`;
+    $('pitch').innerHTML=`<div class="locked-team"><div class="lk">&#128274;</div>
+      <h4>Matchweek ${gw} squad locks 2 days before kickoff</h4>
+      <p>Generated fresh from the latest form, prices and injuries at reveal &mdash; not pre-simulated weeks ahead. The model re-learns each matchweek.</p>
+      <div class="cd">Reveals ${revTxt} &middot; ${days} day${days===1?'':'s'} to go</div></div>`;
+    $('bench').innerHTML='<p class="empty-copy" style="text-align:center;color:var(--faint)">Bench revealed with the squad.</p>';
+    return;
+  }
+  $('teamMeta').innerHTML=`<span>${t.formation}</span><span>\u00A3<b>${t.cost}</b>m</span><span>proj <b>${t.xi_proj}</b> pts</span><span>captain <b>${esc(t.captain)}</b></span><span style="color:var(--pl-green)">\u25CF active</span>`;
+  const xi=t.squad.filter(s=>s.start);
+  const rows={GK:[],DEF:[],MID:[],FWD:[]}; xi.forEach(s=>rows[s.pos].push(s));
+  ['GK','DEF','MID','FWD'].forEach(p=>rows[p].sort((a,b)=>b.proj-a.proj));
+  $('pitch').innerHTML=['GK','DEF','MID','FWD'].map(p=>`<div class="prow2">${rows[p].map(plrTile).join('')}</div>`).join('');
+  const bench=t.squad.filter(s=>!s.start).sort((a,b)=>(a.pos!=='GK')-(b.pos!=='GK')||b.proj-a.proj);
+  $('bench').innerHTML=bench.map(plrTile).join('');
+}
+function renderForm(){
+  const F=DATA.form; const el=$('formtbl'); if(!el)return;
+  if(!F||!F.length){el.innerHTML='<p class="panel-hint">No form data yet.</p>';return;}
+  const badge=q=>q==='hot elite'?'<span class="kbadge candidate">hot elite</span>'
+    :q==='overperforming (fade)'?'<span class="kbadge watch">fade</span>'
+    :q==='elite, cold (buy the dip)'?'<span class="kbadge">buy dip</span>'
+    :'<span class="kbadge">'+esc(q)+'</span>';
+  const rows=F.slice(0,25).map(r=>`<tr><td>${esc(r.name)}</td><td>${esc(r.team)}</td><td>${r.pos}</td>
+    <td>${r.form_raw>=0?'+':''}${r.form_raw}</td><td>${r.quality===''?'\u2014':(r.quality>=0?'+':'')+r.quality}</td>
+    <td>${r.xGI90}</td><td>${r.pts90}</td><td>${r.minutes}</td><td>${badge(r.quadrant)}</td></tr>`).join('');
+  el.innerHTML=`<p class="human-summary">Form and quality are two different things. Ranked on form, shrunk by minutes played.</p>
+    <p class="panel-hint"><b>Form</b> = this season's underlying output per 90 (xG+xA, plus defensive work), z-scored inside each position.
+      <b>Quality</b> = the player's established level from recency-weighted history.
+      A high form score on low quality is the one that regresses \u2014 that is the player a raw form table tells you to buy.</p>
+    <table class="ktab"><thead><tr><th>Player</th><th>Club</th><th>Pos</th><th>Form</th><th>Quality</th>
+      <th>xGI/90</th><th>Pts/90</th><th>Mins</th><th>Read</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="panel-hint">Only ${F.length} players have enough minutes to rate. With two matchweeks played, every
+      form number here is low-confidence \u2014 the ranking is shrunk toward zero on minutes for exactly that reason.</p>`;
+}
+function renderTransfers(){
+  const t=DATA.transfers; const el=$('transfers'); if(!el)return;
+  if(!t){el.innerHTML='<p class="panel-hint">No squad held yet \u2014 this week you draft from scratch, so the XI above <b>is</b> the advice.</p>';return;}
+  const inj=(t.unavailable&&t.unavailable.length)
+    ? `<p class="panel-hint">Carrying at 0 pts (injured/unavailable): <b>${t.unavailable.map(esc).join(', ')}</b> \u2014 first in line to sell.</p>`:'';
+  const rowsHtml=t.options.map(o=>{
+    const mv=o.moves.length?o.moves.map(m=>`${esc(m.out)} \u2192 ${esc(m.in)}`).join('; '):'do nothing';
+    const best=o.n===t.best.n;
+    return `<tr${best?' style="background:rgba(0,255,133,.07)"':''}><td>${o.n}</td><td>${o.gross>=0?'+':''}${o.gross}</td>
+      <td>${o.hit?('\u2212'+o.hit):'0'}</td><td><b>${o.net>=0?'+':''}${o.net}</b></td><td>${mv}${best?' <span class="kbadge candidate">take</span>':''}</td></tr>`;
+  }).join('');
+  el.innerHTML=`<p class="human-summary">${esc(t.verdict)}</p>
+    <p class="panel-hint">You hold last week's squad and get <b>${t.free_transfers}</b> free transfer; each extra costs <b>\u22124 pts</b>.
+      Held XI projects <b>${t.base_xi}</b> pts (captain doubled). Bank \u00A3<b>${t.bank}</b>m.</p>${inj}
+    <table class="ktab"><thead><tr><th>Moves</th><th>Gross</th><th>Hit</th><th>Net</th><th>Plan</th></tr></thead>
+    <tbody>${rowsHtml}</tbody></table>
+    <p class="panel-hint">Net is what you actually gain after the hit. The XI shown above is the squad you can
+      <b>reach</b> from what you hold \u2014 not a from-scratch draft you could never own.</p>`;
+}
+function renderChips(){
+  const c=DATA.chips; if(!c||!$('chips'))return;
+  const badge=v=>v==='PLAY'?'<span class="kbadge candidate">play</span>'
+    :v==='consider'?'<span class="kbadge watch">consider</span>':'<span class="kbadge">hold</span>';
+  $('chips').innerHTML=`<p class="human-summary">${esc(c.summary)}</p>
+    <table class="ktab"><thead><tr><th>Chip</th><th>Value</th><th>Bar</th><th>Verdict</th></tr></thead><tbody>`+
+    c.chips.map(x=>`<tr><td>${esc(x.chip)}</td><td>${x.value!=null?x.value+' pts':'\u2014'}</td>
+      <td>${x.threshold}</td><td>${badge(x.verdict)}</td></tr>`).join('')+
+    `</tbody></table>`+c.chips.map(x=>`<p class="panel-hint"><b>${esc(x.chip)}:</b> ${esc(x.why)}</p>`).join('');
+}
+function renderForward(){
+  const f=DATA.forward; if(!f||!$('forward'))return;
+  const rows=f.weeks||[];
+  const anyGraded=rows.some(w=>w.graded);
+  const taint=rows.some(w=>w.tainted);
+  $('forward').innerHTML=(taint?`<div class="stale">One or more weeks below are marked <b>not valid</b>: the squad was snapshotted after that gameweek had already kicked off, so the model had refit on those results before picking. Those rows are shown for transparency and are excluded from any claim about model skill.</div>`:'')+
+    `<table class="fwd-table"><thead><tr><th>MW</th><th>Projected XI</th><th>Actual</th><th>Diff</th></tr></thead><tbody>`+
+    rows.map(w=>`<tr><td>${w.gw}${w.tainted?' <span class="kbadge thin">not valid</span>':''}</td><td>${w.proj}</td><td>${w.graded?w.actual:'<span class="fwd-pending">pending</span>'}</td><td>${w.graded?((w.actual-w.proj)>=0?'+':'')+(w.actual-w.proj).toFixed(1):'&mdash;'}</td></tr>`).join('')+
+    `</tbody></table><p class="panel-hint" style="margin-top:10px">${anyGraded?'Projected vs actual FPL points scored by the recommended XI, graded from the FPL API after each matchweek.':'No graded weeks yet &mdash; the recommended XI is snapshotted now and scored against real FPL points once Matchweek '+f.current_gw+' is played.'}</p>`;
+}
+function renderStrength(){
+  renderTeam();
+  $('strengthHint').textContent=`${DATA.strength.length} clubs \u00B7 projected points from a full home-and-away simulation. ${DATA.meta.cold_start.join(' & ')} are provisional until real results land.`;
+  const mx=Math.max(...DATA.strength.map(t=>t.idx));
+  $('strength').replaceChildren(...DATA.strength.map(t=>el(
+    `<div class="srow"><span class="rk">${t.rank}</span><span class="nm"><i class="sw" style="background:${esc(t.color)}"></i><span class="tn">${esc(t.team)}</span>${t.provisional?'<span class="prov">PROV</span>':''}</span>
+      <div class="track ${t.provisional?'p':''}"><i style="width:${(t.idx/mx*100).toFixed(1)}%"></i><span class="ix">${t.idx.toFixed(0)}</span></div><span class="pts">${t.proj_points.toFixed(0)}</span></div>`)));
+  // week-by-week: only the active gameweek's picks exist \u2014 no 38-week selector
+  const sel=$('pickGw'); if(sel){sel.replaceChildren(el(`<option>MW ${DATA.active_gw}</option>`));sel.disabled=true;}
+  $('fplHint').textContent=`Best projected FPL performers for Matchweek ${DATA.active_gw}, from simulating that week's fixtures. Refreshes each matchweek.`;
+  renderPicks(); renderForward(); renderForm();renderTransfers();renderChips();
+  $('players').replaceChildren(...DATA.players.map(p=>el(`<div class="prow"><div style="display:flex;gap:8px;align-items:center;min-width:0"><span class="pos ${esc(p.pos)}">${esc(p.pos)}</span><div style="min-width:0"><div class="nm">${esc(p.nm)}</div><div class="tm">${esc(p.team)}</div></div></div><div class="rt">${p.rating.toFixed(0)}</div></div>`)));
+}
+function renderPicks(){
+  const list=(DATA.picks_gw||[]).slice(0,12);
+  $('picks').replaceChildren(...list.map(p=>el(
+    `<div class="prow"><div style="display:flex;gap:8px;align-items:center;min-width:0"><span class="pos ${esc(p.pos)}">${esc(p.pos)}</span>
+      <div style="min-width:0"><div class="nm">${esc(p.nm)}</div><div class="tm">${esc(p.team)} &middot; ${esc(p.price)}m &middot; ${p.own}% own</div></div></div>
+      <div class="rt">${p.proj.toFixed(1)} pts</div></div>`)));
+}
+
+/* ---- backtest ---- */
+function renderBacktest(){
+  const b=DATA.backtest;
+  if(!b||!b.headline){$('btBody').innerHTML='<div class="banner">No backtest data in this build. Run <b>build_backtest.py</b> then rebuild.</div>';return;}
+  $('btSub').textContent=`Strictly walk-forward over ${b.meta.seasons} (${b.meta.n} matches). Each season predicted by a model fit only on earlier data \u2014 no leakage. This is the evidence behind every edge.`;
+  const dc=b.headline[0],base=b.headline[1];
+  const tiles=[['RPS',dc.rps.toFixed(4),'lower is better &middot; market ~0.195'],['Log loss',dc.logloss.toFixed(4),'vs baseline '+base.logloss.toFixed(3)],
+    ['Brier',dc.brier.toFixed(4),''],['Accuracy',(dc.acc*100).toFixed(1)+'%','vs '+(base.acc*100).toFixed(0)+'% base rate']];
+  const item=(key,title,summary,body)=>`<section class="disclosure-item">
+    <button type="button" class="disclosure-trigger" aria-expanded="false" aria-controls="backtest-${key}-panel">
+      <span><b>${title}</b><small>${summary}</small></span><i aria-hidden="true"></i>
+    </button><div class="disclosure-panel" id="backtest-${key}-panel" hidden>${body}</div></section>`;
+  const html=`<div class="backtest-intro"><p class="eyebrow">Headline performance</p><p>Start with the four summary measures. Open one evidence view at a time for the supporting detail.</p></div>
+    <div class="bt-tiles">${tiles.map(t=>`<div class="bt-tile"><div class="lbl">${t[0]}</div><div class="val">${t[1]}</div><div class="sub">${t[2]}</div></div>`).join('')}</div>
+    <div class="disclosure-list backtest-disclosures" id="backtestDisclosures">
+      ${item('calibration','Calibration','Predicted probability compared with actual frequency','<figure class="evidence-block"><p>Points near the diagonal indicate honest probabilities.</p><div id="cal"></div></figure>')}
+      ${item('market','Model vs market',b.market?b.market.n+' priced matches against the closing line':'No market data','<figure class="evidence-block"><p>The bookmaker close is the benchmark to beat.</p><div id="mkt"></div></figure>')}
+      ${item('goals','Goals analysis',`Mean model ${b.goals.mean_pred} vs actual ${b.goals.mean_act} goals`,'<figure class="evidence-block"><p>Predicted and actual scoring by predicted-total bucket.</p>'+goalsTable(b.goals)+'</figure>')}
+      ${item('seasons','Seasonal stability',`${b.per_season.length} out-of-sample seasons`,'<figure class="evidence-block"><p>Out-of-sample RPS by season. Lower is better.</p><div id="seas"></div></figure>')}
+      ${item('cold','Cold-start results','Rated clubs compared with newly promoted teams','<figure class="evidence-block"><p>The promoted-team split shows the cost of limited rating history.</p><div id="cold"></div></figure>')}
+    </div>`;
+  $('btBody').innerHTML=html+forwardTestHTML();
+  drawCalibration(b.calibration);drawMarket(b.market,dc);drawSeasons(b.per_season);drawColdStart(b.cold_start);
+  wireDisclosureGroup($('backtestDisclosures'),{single:true});
+}
+function propsForwardHTML(){
+  const p=DATA.settled_props;
+  if(!p)return '';
+  const head=`<div class="backtest-intro" style="margin-top:26px">
+    <h3 style="margin:0 0 6px;font-size:16px">Props &mdash; BTTS, totals &amp; spreads</h3>
+    <p>Priced off the same score matrix as the 1X2, locked before kickoff and settled from the final score. Binary Brier, lower is better.</p></div>`;
+  if(!p.settled){
+    return head+`<div class="bt-tiles">
+      <div class="bt-tile"><div class="lbl">Prop markets locked</div><div class="val">${p.tracked.toLocaleString()}</div><div class="sub">model price on every fixture</div></div>
+      <div class="bt-tile"><div class="lbl">With a live Kalshi quote</div><div class="val">${p.quoted}</div><div class="sub">non-thin quotes only</div></div>
+      <div class="bt-tile"><div class="lbl">Settled</div><div class="val">0</div><div class="sub">awaiting results</div></div>
+      <div class="bt-tile"><div class="lbl">Status</div><div class="val" style="font-size:15px;color:var(--amber)">armed</div><div class="sub">grades after MW1</div></div></div>
+      <p class="panel-hint">Kalshi has only opened props on a single fixture so far and every quote is still thin (no volume, wide spread), so none is counted as a live quote yet. The model's own prop prices are locked for all ${p.tracked.toLocaleString()} markets regardless, so they can be graded the moment results land.</p>`;
+  }
+  const better=(a,b)=>a!=null&&b!=null?(a<b?'pos':'neg'):'';
+  const kindRows=Object.entries(p.by_kind||{}).map(([k,v])=>
+    `<tr><td>${k==='btts'?'Both teams to score':k==='total'?'Total goals':'Spread'}</td><td>${v.n}</td>
+     <td class="${better(v.brier_model,v.brier_kalshi)}">${v.brier_model??'\u2014'}</td>
+     <td class="${better(v.brier_kalshi,v.brier_model)}">${v.brier_kalshi??'\u2014'}</td></tr>`).join('');
+  const rows=p.board.map(r=>`<tr><td>MW${r.gw}</td><td>${esc(r.fixture)}</td><td>${esc(r.label)}</td>
+      <td>${r.model!=null?r.model+'%':'\u2014'}</td><td>${r.kalshi!=null?r.kalshi+'%':'\u2014'}</td>
+      <td>${esc(r.settled)} <small>(${esc(r.result)})</small></td>
+      <td class="${better(r.brier_model,r.brier_kalshi)}">${r.brier_model??'\u2014'}</td>
+      <td class="${better(r.brier_kalshi,r.brier_model)}">${r.brier_kalshi??'\u2014'}</td></tr>`).join('');
+  return head+`<div class="bt-tiles">
+      <div class="bt-tile"><div class="lbl">Settled props</div><div class="val">${p.settled}</div><div class="sub">of ${p.tracked.toLocaleString()} locked</div></div>
+      <div class="bt-tile"><div class="lbl">Model closer</div><div class="val">${p.model_wins}</div><div class="sub">vs Kalshi ${p.kalshi_wins}</div></div>
+      <div class="bt-tile"><div class="lbl">Brier &mdash; model</div><div class="val ${better(p.brier_model,p.brier_kalshi)}">${p.brier_model??'\u2014'}</div><div class="sub">binary</div></div>
+      <div class="bt-tile"><div class="lbl">Brier &mdash; Kalshi</div><div class="val ${better(p.brier_kalshi,p.brier_model)}">${p.brier_kalshi??'\u2014'}</div><div class="sub">where quoted</div></div></div>
+    ${kindRows?`<figure class="evidence-block" style="margin-top:14px"><p>By market type.</p><table class="ktab"><thead><tr><th>Market</th><th>n</th><th>Brier M</th><th>Brier K</th></tr></thead><tbody>${kindRows}</tbody></table></figure>`:''}
+    <figure class="evidence-block" style="margin-top:14px"><p>Settled prop markets, newest first.</p>
+    <table class="ktab"><thead><tr><th>MW</th><th>Fixture</th><th>Market</th><th>Model</th><th>Kalshi</th><th>Settled</th><th>Brier M</th><th>Brier K</th></tr></thead><tbody>${rows}</tbody></table></figure>`;
+}
+function forwardTestHTML(){
+  const s=DATA.settled;
+  if(!s)return propsForwardHTML();
+  const head=`<div class="backtest-intro" style="margin-top:30px"><p class="eyebrow">Forward test</p>
+    <h3 style="margin:0 0 6px;font-size:18px">Model vs Kalshi, settled live</h3>
+    <p>Every fixture's model probabilities and Kalshi's closing mid are locked in the ledger <b>before kickoff</b>, then scored against the real result. Lower Brier is better; "closer" is whichever forecast was nearer the truth.</p></div>`;
+  if(!s.settled){
+    return head+`<div class="bt-tiles">
+      <div class="bt-tile"><div class="lbl">Markets tracked</div><div class="val">${s.tracked}</div><div class="sub">Kalshi price locked pre-kickoff</div></div>
+      <div class="bt-tile"><div class="lbl">Settled</div><div class="val">0</div><div class="sub">awaiting first results</div></div>
+      <div class="bt-tile"><div class="lbl">Model vs Kalshi</div><div class="val">&mdash;</div><div class="sub">scored on settlement</div></div>
+      <div class="bt-tile"><div class="lbl">Status</div><div class="val" style="font-size:15px;color:var(--amber)">armed</div><div class="sub">grades automatically after MW1</div></div>
+    </div>
+    <p class="panel-hint">${s.tracked} Kalshi market${s.tracked===1?'':'s'} are locked and waiting. Nothing is scored yet because no 2026/27 fixture has been played &mdash; the first settled markets appear here after Matchweek 1.</p>`+propsForwardHTML();
+  }
+  const better=(a,b)=>a!=null&&b!=null?(a<b?'pos':'neg'):'';
+  const tiles=`<div class="bt-tiles">
+    <div class="bt-tile"><div class="lbl">Settled markets</div><div class="val">${s.settled}</div><div class="sub">of ${s.tracked} tracked</div></div>
+    <div class="bt-tile"><div class="lbl">Model closer</div><div class="val">${s.model_wins}</div><div class="sub">vs Kalshi ${s.kalshi_wins}${s.ties?` \u00B7 ${s.ties} tied`:''}</div></div>
+    <div class="bt-tile"><div class="lbl">Brier &mdash; model</div><div class="val ${better(s.brier_model,s.brier_kalshi)}">${s.brier_model??'\u2014'}</div><div class="sub">lower is better</div></div>
+    <div class="bt-tile"><div class="lbl">Brier &mdash; Kalshi</div><div class="val ${better(s.brier_kalshi,s.brier_model)}">${s.brier_kalshi??'\u2014'}</div><div class="sub">${s.brier_book!=null?'book '+s.brier_book:'exchange close'}</div></div>
+  </div>`;
+  const verdict=(s.brier_model!=null&&s.brier_kalshi!=null)
+    ? (s.brier_model<s.brier_kalshi
+        ? `<b style="color:var(--pl-green)">The model is ahead of Kalshi</b> on settled markets (Brier ${s.brier_model} vs ${s.brier_kalshi}) across ${s.settled} game${s.settled===1?'':'s'}. Small samples swing hard &mdash; treat this as provisional until dozens of markets have settled.`
+        : `<b style="color:var(--amber)">Kalshi is ahead of the model</b> on settled markets (Brier ${s.brier_kalshi} vs ${s.brier_model}) across ${s.settled} game${s.settled===1?'':'s'}. That matches the historical backtest, where the model trails the closing line.`)
+    : '';
+  const rows=s.board.map(r=>{
+    const nm={H:r.home,D:'Draw',A:r.away}[r.outcome];
+    const tag=r.closer==='model'?'<span class="kbadge candidate">model</span>'
+      :r.closer==='kalshi'?'<span class="kbadge watch">kalshi</span>':'<span class="kbadge">tie</span>';
+    const link=r.url?` <a class="src" href="${esc(r.url)}" target="_blank" rel="noopener">&#8599;</a>`:'';
+    return `<tr><td>MW${r.gw}</td><td>${esc(r.home)} v ${esc(r.away)}${link}</td>
+      <td>${esc(r.result)} <small>(${esc(nm)})</small></td>
+      <td>${r.model.map(x=>Math.round(x)).join('/')}</td>
+      <td>${r.kalshi.map(x=>Math.round(x)).join('/')}</td>
+      <td class="${better(r.brier_model,r.brier_kalshi)}">${r.brier_model}</td>
+      <td class="${better(r.brier_kalshi,r.brier_model)}">${r.brier_kalshi}</td>
+      <td>${tag}</td></tr>`;}).join('');
+  return head+tiles+`<p class="human-summary">${verdict}</p>
+    <figure class="evidence-block" style="margin-top:14px"><p>Settled markets, newest matchweek first. Probabilities shown H/D/A.</p>
+    <table class="ktab"><thead><tr><th>MW</th><th>Fixture</th><th>Result</th><th>Model</th><th>Kalshi</th><th>Brier M</th><th>Brier K</th><th>Closer</th></tr></thead><tbody>${rows}</tbody></table></figure>`+propsForwardHTML();
+}
+function goalsTable(g){return `<table class="gtab"><thead><tr><th>Pred total</th><th>n</th><th>Model</th><th>Actual</th></tr></thead><tbody>`+
+  g.buckets.map(x=>`<tr><td>${x.bucket}</td><td>${x.n}</td><td>${x.pred}</td><td>${x.act}</td></tr>`).join('')+`</tbody></table>`;}
+function drawCalibration(c){
+  const W=420,H=300,pad={l:40,r:12,t:10,b:34},x=v=>pad.l+v*(W-pad.l-pad.r),y=v=>H-pad.b-v*(H-pad.t-pad.b);
+  const svg=mk('svg',{viewBox:`0 0 ${W} ${H}`,class:'axis'});const g=mk('g',{class:'grid'});
+  for(let t=0;t<=1;t+=0.25){g.appendChild(mk('line',{x1:pad.l,x2:W-pad.r,y1:y(t),y2:y(t)}));
+    const ty=mk('text',{x:pad.l-6,y:y(t)+3,'text-anchor':'end'});ty.textContent=(t*100)+'';svg.appendChild(ty);
+    const tx=mk('text',{x:x(t),y:H-pad.b+16,'text-anchor':'middle'});tx.textContent=(t*100)+'';svg.appendChild(tx);}
+  svg.appendChild(g);
+  svg.appendChild(mk('line',{x1:x(0),y1:y(0),x2:x(1),y2:y(1),stroke:'var(--faint)','stroke-width':1.5,'stroke-dasharray':'5 5'}));
+  let d='';c.forEach((p,i)=>{d+=(i?'L':'M')+x(p.pred)+' '+y(p.act)+' ';});
+  svg.appendChild(mk('path',{d,fill:'none',stroke:'var(--pl-green)','stroke-width':2,'stroke-linejoin':'round'}));
+  c.forEach(p=>{const r=Math.max(3,Math.min(9,Math.sqrt(p.n)/6));svg.appendChild(mk('circle',{cx:x(p.pred),cy:y(p.act),r,fill:'var(--pl-green)',stroke:'var(--panel)','stroke-width':1.5}));});
+  $('cal').appendChild(svg);
+}
+function drawMarket(mkt,dc){
+  if(!mkt){$('mkt').innerHTML='<p style="color:var(--faint);font-size:12px">no market comparison</p>';return;}
+  const rows=[['Model (OOS)',mkt.model.rps,'var(--pl-cyan)'],['Bookmaker close',mkt.market.rps,'var(--pl-green)']];
+  const mx=Math.max(...rows.map(r=>r[1]))*1.08;
+  $('mkt').innerHTML=`<div class="cmp">`+rows.map(r=>`<div class="row"><span class="lab">${r[0]}</span><div class="bar"><i style="width:${(r[1]/mx*100).toFixed(0)}%;background:${r[2]}"></i></div><span class="num">${r[1].toFixed(4)}</span></div>`).join('')+
+    `</div><p style="margin:10px 0 0;font-size:10.5px;color:var(--faint);font-family:var(--mono)">RPS, lower better. Model accuracy ${(mkt.model.acc*100).toFixed(1)}% vs market ${(mkt.market.acc*100).toFixed(1)}%.</p>`;
+}
+function drawSeasons(ps){
+  const mx=Math.max(...ps.map(s=>s.rps))*1.05,mn=Math.min(...ps.map(s=>s.rps))*0.96;
+  $('seas').innerHTML=`<div class="cmp">`+ps.map(s=>`<div class="row"><span class="lab mono">${s.season}</span><div class="bar"><i style="width:${((s.rps-mn)/(mx-mn)*100).toFixed(0)}%;background:var(--pl-cyan)"></i></div><span class="num">${s.rps.toFixed(3)}</span></div>`).join('')+`</div>`;
+}
+function drawColdStart(cold){
+  $('cold').innerHTML=cold&&cold.length?`<div class="cold-compare">${cold.map(c=>`<div>
+    <span>${c.group==='cold_start'?'Cold-start fixtures':'Rated fixtures'}</span><b>RPS ${c.rps}</b><small>${c.n} matches \u00B7 ${(c.acc*100).toFixed(1)}% accuracy</small>
+  </div>`).join('')}</div>`:'<p class="empty-copy">No cold-start split in this build.</p>';
+}
+
+function applyHash(){const p=new URLSearchParams(location.hash.slice(1));
+  const g=+p.get('gw');if(g>=1&&g<=DATA.weeks.length)gw=g;
+  if(p.get('f'))gFilter=p.get('f');
+  const mid=p.get('m');if(mid){showView('games');renderWeek(mid);}else renderWeek();}
+function boot(d){DATA=d;
+  document.querySelectorAll('#tabs button').forEach(b=>b.addEventListener('click',()=>{showView(b.dataset.view);if(b.dataset.view==='games')location.hash=`gw=${gw}`;}));
+  $('gwSel').replaceChildren(...d.weeks.map(w=>{const o=document.createElement('option');o.value=String(w.gw);o.textContent='Matchweek '+w.gw;return o}));
+  $('gwSel').addEventListener('change',e=>{gw=+e.target.value;renderWeek();});
+  $('prev').addEventListener('click',()=>{if(gw>1){gw--;renderWeek();}});
+  $('next').addEventListener('click',()=>{if(gw<d.weeks.length){gw++;renderWeek();}});
+  const tgws=Object.keys(d.team_by_gw||{}).map(Number).sort((a,b)=>a-b);
+  if(tgws.length){$('tPrev').addEventListener('click',()=>{if(teamGw>tgws[0]){teamGw--;renderTeam();}});
+    $('tNext').addEventListener('click',()=>{if(teamGw<tgws[tgws.length-1]){teamGw++;renderTeam();}});}
+  wireDisclosureGroup($('fantasyDisclosures'),{single:true});
+  renderGamesMeta();renderNews();renderStrength();applyHash();
+}
+(window.__DASHBOARD__?Promise.resolve(window.__DASHBOARD__):fetch('dashboard.json').then(r=>{if(!r.ok)throw 0;return r.json()}))
+ .then(boot).catch(()=>{$('cards').innerHTML='<div style="padding:40px;text-align:center;color:var(--muted)">dashboard.json not found &mdash; run build_dashboard.py, then serve with python3 -m http.server.</div>'});
+</script>
+</body>
+</html>
