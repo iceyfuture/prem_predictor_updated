@@ -296,8 +296,20 @@ def record_props_ledger(weeks, built_at):
                         rec["kal_at"] = built_at
                 if m["finished"] and m["result"] and not rec.get("graded"):
                     hs, as_ = (int(x) for x in m["result"].split("-"))
-                    line = float(rec["line"]) if rec["line"] not in ("", None) else 0.0
-                    y = kalshi.settle_prop(rec["kind"], rec["side"], line, hs, as_)
+                    # a correct-score line is the (home, away) pair, not a number
+                    if rec["kind"] == "score":
+                        try:
+                            line = tuple(int(v) for v in str(rec["line"]).strip("()").split(","))
+                        except ValueError:
+                            line = (-1, -1)
+                    else:
+                        line = float(rec["line"]) if rec["line"] not in ("", None) else 0.0
+                    cc = (m.get("corners") or {}).get("actual") or {}
+                    y = kalshi.settle_prop(rec["kind"], rec["side"], line, hs, as_,
+                                           hc=cc.get("h"), ac=cc.get("a"))
+                    if y is None:      # corners not yet known - leave it ungraded, try next build
+                        rows[key] = rec
+                        continue
                     rec["result"] = m["result"]; rec["settled"] = "YES" if y else "NO"
                     rec["graded"] = built_at
                     try:
@@ -674,6 +686,32 @@ def build():
             for ln in (1.5, 2.5):
                 add_prop("spread", f"{h} wins by >{ln}", ln, "h", pm["home_by"][int(ln)], kt_sp.get(("h", ln)))
                 add_prop("spread", f"{a} wins by >{ln}", ln, "a", pm["away_by"][int(ln)], kt_sp.get(("a", ln)))
+            # ---- TEAM CORNERS: the one market with validated out-of-sample signal.
+            # prem_corners beat a naive baseline by 7.7% on TEAM corners (corr 0.375) and by
+            # 0.4% on totals (corr 0.123), so only the team side is priced here as a prop.
+            kt_c = {(c["side"], c["line"]): c["leg"] for c in (kp or {}).get("tcorners", [])}
+            cprice = pcorn.price(cmodel, h, a)
+            for (sd, ln), leg in sorted(kt_c.items()):
+                book = cprice["home_at_least"] if sd == "h" else cprice["away_at_least"]
+                if ln in book:
+                    who = h if sd == "h" else a
+                    add_prop("tcorners", f"{who} {ln}+ corners", ln, sd, book[ln] / 100.0, leg)
+
+            # ---- CORRECT SCORE and TEAM TOTAL: pure marginals of the same score matrix.
+            # No new model - we were already computing these cells and discarding them.
+            for sc in (kp or {}).get("score", []):
+                i, j = sc["hs"], sc["as"]
+                mp = pm["score"].get((i, j))
+                if mp is not None:
+                    add_prop("score", f"{i}-{j}", (i, j), None, mp, sc["leg"])
+            for tt in (kp or {}).get("teamtotal", []):
+                book = pm["home_goals_at_least"] if tt["side"] == "h" else pm["away_goals_at_least"]
+                mp = book.get(tt["line"])
+                if mp is not None:
+                    who = h if tt["side"] == "h" else a
+                    add_prop("teamtotal", f"{who} {tt['line']}+ goals", tt["line"], tt["side"],
+                             mp, tt["leg"])
+
             # a prop entry is only worth showing when the quote is real AND the fixture is sound
             best_prop = None
             live_props = [p_ for p_ in plist if p_["ev"] is not None and not p_["thin"]]

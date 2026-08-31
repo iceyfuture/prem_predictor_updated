@@ -109,9 +109,22 @@ def fetch_markets(max_age_min=30):
     return out
 
 
-PROP_SERIES = {"btts": "KXEPLBTTS", "total": "KXEPLTOTAL", "spread": "KXEPLSPREAD"}
+PROP_SERIES = {"btts": "KXEPLBTTS", "total": "KXEPLTOTAL", "spread": "KXEPLSPREAD",
+               # Added 2026-08-30. We had been pricing 4 of the 30+ EPL series Kalshi lists,
+               # and fighting for scraps on the one market (1X2) three separate tests say we
+               # cannot beat - while these sat unpriced, all downstream of models we already have.
+               "tcorners": "KXEPLTCORNERS",   # TEAM corners: our only market with validated
+                                              # out-of-sample signal (+7.7% MAE vs naive)
+               "score": "KXEPLSCORE",         # correct score - literally the Dixon-Coles matrix
+               "teamtotal": "KXEPLTEAMTOTAL"} # a team's goals - a marginal of that same matrix
 _OVER = re.compile(r"over\s+([\d.]+)", re.I)
 _SPREAD = re.compile(r"^(.*?)\s+wins by more than\s+([\d.]+)", re.I)
+# "Aston Villa: 5+"  /  "Arsenal: 6+ corners"
+_TCORN = re.compile(r"^(.*?):\s*(\d+)\+", re.I)
+# "2-1", "Aston Villa 2-1" etc - a correct-score line
+_SCORE = re.compile(r"(\d+)\s*[-\u2013]\s*(\d+)")
+# "Arsenal 2+ goals" / "Arsenal: 2+"
+_TTOT = re.compile(r"^(.*?)[:\s]\s*(\d+)\+", re.I)
 
 
 def fetch_props(max_age_min=30):
@@ -136,7 +149,8 @@ def fetch_props(max_age_min=30):
             if not h or not a:
                 continue
             url = WEB.format((e.get("event_ticker") or "").lower())
-            slot = out.setdefault((h, a), {"btts": None, "total": [], "spread": []})
+            slot = out.setdefault((h, a), {"btts": None, "total": [], "spread": [],
+                                           "tcorners": [], "score": [], "teamtotal": []})
             for m in e.get("markets", []):
                 sub = (m.get("yes_sub_title") or "").strip()
                 bid, ask = _f(m.get("yes_bid_dollars")), _f(m.get("yes_ask_dollars"))
@@ -152,16 +166,38 @@ def fetch_props(max_age_min=30):
                     mo = _OVER.search(sub)
                     if mo:
                         slot["total"].append({"line": float(mo.group(1)), "leg": leg})
-                else:
+                elif kind == "spread":
                     ms = _SPREAD.match(sub)
                     if ms:
                         team = KALSHI_TEAMS.get(ms.group(1).strip())
                         if team in (h, a):
                             slot["spread"].append({"side": "h" if team == h else "a",
                                                    "line": float(ms.group(2)), "leg": leg})
+                elif kind == "tcorners":
+                    mc = _TCORN.match(sub)
+                    if mc:
+                        team = KALSHI_TEAMS.get(mc.group(1).strip())
+                        if team in (h, a):
+                            slot["tcorners"].append({"side": "h" if team == h else "a",
+                                                     "line": int(mc.group(2)), "leg": leg})
+                elif kind == "score":
+                    msc = _SCORE.search(sub)
+                    if msc:
+                        slot["score"].append({"hs": int(msc.group(1)), "as": int(msc.group(2)),
+                                              "leg": leg})
+                elif kind == "teamtotal":
+                    mt = _TTOT.match(sub)
+                    if mt:
+                        team = KALSHI_TEAMS.get(mt.group(1).strip())
+                        if team in (h, a):
+                            slot["teamtotal"].append({"side": "h" if team == h else "a",
+                                                      "line": int(mt.group(2)), "leg": leg})
     for v in out.values():
         v["total"].sort(key=lambda x: x["line"])
         v["spread"].sort(key=lambda x: (x["side"], x["line"]))
+        v["tcorners"].sort(key=lambda x: (x["side"], x["line"]))
+        v["teamtotal"].sort(key=lambda x: (x["side"], x["line"]))
+        v["score"].sort(key=lambda x: (x["hs"], x["as"]))
     return out
 
 
@@ -175,15 +211,33 @@ def price_props(M):
     over = {k: float(sum(M[i][j] for i in rng for j in rng if i + j > k)) for k in range(6)}
     hby = {k: float(sum(M[i][j] for i in rng for j in rng if i - j > k)) for k in range(6)}
     aby = {k: float(sum(M[i][j] for i in rng for j in rng if j - i > k)) for k in range(6)}
-    return {"btts": btts, "over": over, "home_by": hby, "away_by": aby}
+    # Correct score is the single most natural output of a Dixon-Coles model - it IS the
+    # matrix cell - and we were computing it and throwing it away.
+    score = {(i, j): float(M[i][j]) for i in rng for j in rng if i < 7 and j < 7}
+    # A team's own goal count is just the marginal of that same matrix.
+    h_at_least = {k: float(sum(M[i][j] for i in rng for j in rng if i >= k)) for k in range(6)}
+    a_at_least = {k: float(sum(M[i][j] for i in rng for j in rng if j >= k)) for k in range(6)}
+    return {"btts": btts, "over": over, "home_by": hby, "away_by": aby,
+            "score": score, "home_goals_at_least": h_at_least, "away_goals_at_least": a_at_least}
 
 
-def settle_prop(kind, side, line, hs, as_):
-    """Did this prop settle YES? kind in btts|total|spread."""
+def settle_prop(kind, side, line, hs, as_, hc=None, ac=None):
+    """Did this prop settle YES? kind in btts|total|spread|score|teamtotal|tcorners.
+    `hc`/`ac` are the actual corner counts, needed only for tcorners."""
     if kind == "btts":
         return 1 if (hs >= 1 and as_ >= 1) else 0
     if kind == "total":
         return 1 if (hs + as_) > line else 0
+    if kind == "score":
+        want_h, want_a = line          # line carries the (home, away) pair for a correct score
+        return 1 if (hs == want_h and as_ == want_a) else 0
+    if kind == "teamtotal":
+        return 1 if ((hs if side == "h" else as_) >= line) else 0
+    if kind == "tcorners":
+        got = hc if side == "h" else ac
+        if got is None:
+            return None                # corners unknown -> cannot settle, leave ungraded
+        return 1 if got >= line else 0
     d = (hs - as_) if side == "h" else (as_ - hs)
     return 1 if d > line else 0
 

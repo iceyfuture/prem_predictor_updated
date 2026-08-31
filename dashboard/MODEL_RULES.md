@@ -405,3 +405,41 @@ of bug as the earlier Bruno Fernandes miss.
 Also fixed: `build_player_stats.gameweeks()` only pulled FINISHED gameweeks, so a gameweek with
 9 of 10 games played was invisible to every consumer until the last match ended - exactly when
 form data is most wanted. The in-progress gameweek is now pulled and flagged `provisional`.
+
+### 18. Team corners, correct score and team totals — 2026-08-30
+
+We had been pricing **4 of the 30+ EPL series Kalshi lists**, and all four were markets the
+1X2 evidence says we cannot beat. Enumerating `/series?category=Sports` turned up the rest.
+Three are now priced and logged, all from models that already existed:
+
+| Series | Market | Priced from |
+|---|---|---|
+| `KXEPLTCORNERS` | **Team** corners | `prem_corners` - the ONLY market where we have validated out-of-sample signal |
+| `KXEPLSCORE` | Correct score | the Dixon-Coles matrix cell, which we were computing and discarding |
+| `KXEPLTEAMTOTAL` | A team's goals | a marginal of that same matrix |
+
+**Team corners is the one that matters.** Rule 8 validated the corners model at +7.7% MAE over
+a naive baseline on TEAM corners (correlation 0.375) and +0.4% on TOTALS (correlation 0.123).
+Kalshi lists both; only the team side is priced as a prop, and `KXEPLCORNERS` (totals) is
+deliberately left alone. This is the first market we have entered where the model has
+demonstrated signal against reality rather than against a price.
+
+First live quote, Aston Villa v Arsenal:
+
+    Arsenal 6+ corners   model 38.4%   YES ask 45c (EV -14.7%)   NO ask 57c (EV +8.1%)
+    Villa 5+ corners     model 40.0%   YES ask 41c (EV  -2.4%)   NO ask 60c (EV  0.0%)
+
+Not thin: 1,124 volume and a 2c spread on the Arsenal leg. Villa prices within a point of our
+number; Arsenal is a 5.6-point disagreement.
+
+Settlement uses the real corner counts already captured from ESPN into `corners.actual`.
+`settle_prop` returns None when corners are not yet known, and the row is left ungraded for a
+later build rather than being force-settled as a loss.
+
+Correct score carries the (home, away) pair in the `line` column instead of a number, and
+`settle_prop` special-cases it. Both `KXEPLSCORE` and `KXEPLTEAMTOTAL` currently have no open
+markets; the parsers and pricing are in place for when they list.
+
+Discipline unchanged: these are LOGGED, not traded. The prop ledger exists to build evidence
+before anything is staked, and every previous "edge" in it collapsed once the top two winners
+were removed.
