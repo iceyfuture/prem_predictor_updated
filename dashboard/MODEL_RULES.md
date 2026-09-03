@@ -679,3 +679,32 @@ matches in the 8-year window, so they have nothing to filter down to. The file i
 what it is — a filtered historical fit — but it is not the current-season team table. That is
 `team_strength_index.csv`, which now covers all 20 with cold-start priors and flags the two as
 provisional. Use that one.
+
+### 19. "Recent form" was not recent — 2026-09-03 (two bugs, user-spotted)
+
+The card read `Brentford -1 vs Sunderland -3` after Brentford had opened W/D and Sunderland
+L/W. Both numbers were wrong, for two separate reasons.
+
+**(a) This season was not in it.** `current_form()` is goal difference over the last 6 matches
+and reads the historical results file, which ends at the close of LAST season. Rule 1 folds
+finished 26/27 games into the ratings but nothing was folding them into form, so every card
+showed last season's form. Tottenham read **+2** after losing 0-3 and 0-2. Fixed by passing the
+same folded frame the refit uses.
+
+    Brentford -1 -> +3      Sunderland -3 -> +3      Tottenham +2 -> -4      Arsenal +6 -> +10
+
+**(b) "Last 6" reached back a decade.** The deque had no time cutoff, so a promoted club's last
+six *Premier League* matches were whenever it was last in the league:
+
+    Coventry  - form built from matches played April-May 2001   (25 years old)
+    Hull      - form built from matches played in 2017          (9 years old)
+
+`FORM_MAX_AGE_DAYS = 550` (~18 months) now bounds it, and `with_counts=True` reports how many
+matches actually contributed so a thin number can be labelled. Clubs with six genuine recent
+games are untouched; only the stale cases move.
+
+    Hull -9 -> +3 (2 games)      Coventry -9 -> -4 (2 games)
+
+Cards now print "(2 games)" when fewer than six contributed. This was never cosmetic: the value
+feeds the supremacy blend, which was fitted on contiguous in-season form and had no business
+being handed a result from 2001.

@@ -117,16 +117,34 @@ def get_mapping(refit=False):
     return m
 
 
-def current_form(df=None, n=FORM_N):
-    """Latest recent-form supremacy per team (for predicting upcoming fixtures)."""
+# A promoted club's "last 6 Premier League matches" can be a decade old. Coventry's were
+# played in April-May 2001 and Hull's in 2017, so the card was reporting 25-year-old results
+# as recent form - and feeding them to the supremacy blend, which was fitted on contiguous
+# in-season form and has no business seeing them. Anything older than this is not form.
+FORM_MAX_AGE_DAYS = 550          # ~18 months: this season plus the whole of the last one
+
+
+def current_form(df=None, n=FORM_N, max_age_days=FORM_MAX_AGE_DAYS, with_counts=False):
+    """Latest recent-form supremacy per team (for predicting upcoming fixtures).
+
+    Only matches inside `max_age_days` of the most recent result count. A club with fewer
+    than `n` recent matches gets the sum of what it actually has, which is the honest answer -
+    `with_counts=True` returns how many that was so callers can flag a thin number.
+    """
     from collections import deque, defaultdict
+    import pandas as _pd
     if df is None:
         df = load_results()
+    if max_age_days:
+        asof = _pd.to_datetime(df["date"]).max()
+        df = df[_pd.to_datetime(df["date"]) >= asof - _pd.Timedelta(days=max_age_days)]
     hist = defaultdict(lambda: deque(maxlen=n))
     for r in df.itertuples(index=False):
         gd = r.home_score - r.away_score
         hist[r.home_team].append(gd)
         hist[r.away_team].append(-gd)
+    if with_counts:
+        return {t: (sum(dq), len(dq)) for t, dq in hist.items()}
     return {t: sum(dq) for t, dq in hist.items()}
 
 

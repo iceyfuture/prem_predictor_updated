@@ -603,7 +603,25 @@ def build():
     if cold:
         print(f"  cold-start prior -> {sorted(cold)}")
 
-    form = so.current_form()
+    # RULE 1 applies here too. current_form() is goal difference over the last 6 matches, and
+    # it reads the historical results file - which ends at the close of LAST season. Without
+    # folding in this season's finished games the "Recent form (last 6)" line on every card was
+    # showing last season's form: Brentford read -1 after opening W/D (really +3), Sunderland
+    # -3 (really +3), and Tottenham +2 after losing 0-3 and 0-2 (really -4). The number fed the
+    # supremacy blend as well as the card, so it was not merely cosmetic.
+    if extra is not None and len(extra):
+        _hist = so.load_results()
+        _cur = _pd.DataFrame({"date": _pd.to_datetime(extra["date"]),
+                              "home_team": extra["home_team"], "away_team": extra["away_team"],
+                              "home_score": extra["home_score"], "away_score": extra["away_score"]})
+        _fc = so.current_form(_pd.concat([_hist, _cur], ignore_index=True).sort_values("date"),
+                              with_counts=True)
+    else:
+        _fc = so.current_form(with_counts=True)
+    # value for the model, count for the card - a promoted club with 2 recent games should not
+    # look like a club with 6, and current_form now refuses to reach back a decade to find them.
+    form = {t: v for t, (v, _n) in _fc.items()}
+    form_n = {t: _n for t, (_v, _n) in _fc.items()}
     shares = ps.load_shares()
     # (team_strength_index.csv is NOT read here. It used to be, and the value was never used -
     #  a dead read of a file built on LAST season's clubs. The live table comes from
@@ -648,6 +666,7 @@ def build():
             dp = dc.predict(model, h, a)
             dcp = np.array([dp["win_h"], dp["draw"], dp["win_a"]])
             hf, af = form.get(h, 0), form.get(a, 0)
+            hfn, afn = form_n.get(h, 0), form_n.get(a, 0)
             sp = np.array(so.probs_from_rating(mapping, hf - af))
             p = wdc * dcp + wsup * sp
             p = p / p.sum()
@@ -684,7 +703,9 @@ def build():
                 "fav": fav, "confidence": conf, "tier": tier, "conf_reasons": conf_why,
                 "factors": [
                     {"k": "Long-run strength", "v": f"{h} net {round(float(model['attack'][ih]+model['defense'][ih]),2) if ih is not None else 'n/a'} vs {a} net {round(float(model['attack'][ia]+model['defense'][ia]),2) if ia is not None else 'n/a'}"},
-                    {"k": "Recent form (last 6)", "v": f"{h} {hf:+d} vs {a} {af:+d}"},
+                    {"k": "Recent form (last 6)",
+                     "v": (f"{h} {hf:+d}" + (f" ({hfn} games)" if hfn < 6 else "")
+                           + f" vs {a} {af:+d}" + (f" ({afn} games)" if afn < 6 else ""))},
                     {"k": "Expected goals", "v": f"{dp['xg_h']:.2f} - {dp['xg_a']:.2f}"},
                     {"k": "vs market", "v": (f"{edge['side']} +{edge['ev']}% ({edge['grade']})" if edge else ("in line with market" if priced else "no market yet"))},
                 ],
