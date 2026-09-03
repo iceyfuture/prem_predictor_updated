@@ -135,7 +135,11 @@ def append_history(rows, gw):
     path = os.path.join(OUT, "fpl_player_history.csv")
     import datetime
     today = datetime.date.today().isoformat()
-    keep = ["id", "name", "team", "pos", "price", "minutes", "starts", "total_points", "form",
+    # status / chance_next / ep_next are here so a past gameweek can be RE-PROJECTED later from
+    # what was actually known before it kicked off. Without them a retro head-to-head between two
+    # versions of the projection is impossible - the availability and ep inputs are gone.
+    keep = ["id", "name", "team", "pos", "price", "status", "chance_next", "ep_next",
+            "minutes", "starts", "total_points", "form",
             "selected_by_pct", "xG", "xA", "xGI", "xGC", "goals", "assists",
             "goals_minus_xG", "assists_minus_xA", "clean_sheets", "goals_conceded",
             "defensive_contribution", "ict_index", "bps"]

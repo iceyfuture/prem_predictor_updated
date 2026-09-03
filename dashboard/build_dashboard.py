@@ -112,6 +112,28 @@ def top_scores(model, h, a, k=3):
     return [{"s": f"{int(i)}-{int(j)}", "p": round(float(M[i, j]) * 100, 1)} for i, j in flat[:k]]
 
 
+def fold_finished(events):
+    """RULE 1's training addition, as a function: this season's finished results, ready to pass
+    to dc.fit(extra=...). Extracted so the ranking exports refit exactly the way the dashboard
+    does instead of keeping a second copy of the rule that can drift from it."""
+    finished = [e for e in events if e["finished"] and e["hs"] is not None]
+    if not finished:
+        return None
+    import pandas as pd
+    return pd.DataFrame([{"date": e["utc"][:10], "home_team": e["home"], "away_team": e["away"],
+                          "home_score": e["hs"], "away_score": e["as"]} for e in finished])
+
+
+def live_model(events):
+    """The model the desk actually runs on: refit with this season's results folded in
+    (RULE 1), then shrunk toward the promoted-club prior (RULE 4). Returns (model, clubs, cold)."""
+    extra = fold_finished(events)
+    model = dc.fit(extra=extra, verbose=False)
+    clubs = sorted({e["home"] for e in events} | {e["away"] for e in events})
+    model, cold = apply_cold_start(model, clubs)
+    return model, clubs, cold
+
+
 def build_strength_2627(model, clubs, cold):
     """Strength index for THIS season's 20 clubs (not last season's): simulate a full
     double round-robin among them with the cold-started model and score 3*P(win)+1*P(draw).
@@ -324,6 +346,45 @@ def record_props_ledger(weeks, built_at):
                             rec["closer"] = ("model" if rec["brier_model"] < rec["brier_kalshi"]
                                              else "kalshi" if rec["brier_kalshi"] < rec["brier_model"] else "tie")
                 rows[key] = rec
+    # SETTLE FROM THE STORED ROWS, not only from the rows this build happened to regenerate.
+    # btts/totals/spreads are emitted unconditionally every build, so they always came back
+    # round to be graded. Team corners are only emitted while Kalshi still LISTS the market -
+    # so once the event closed, the locked row was never revisited and sat unsettled forever
+    # even though the result and the corner counts were sitting right there. Sweep everything.
+    fx = {(m["home"], m["away"]): m for w in weeks for m in w["matches"]}
+    for key, rec in rows.items():
+        if rec.get("graded") or not rec.get("model"):
+            continue
+        m = fx.get((rec["home"], rec["away"]))
+        if not m or not m.get("finished") or not m.get("result"):
+            continue
+        hs, as_ = (int(x) for x in m["result"].split("-"))
+        if rec["kind"] == "score":
+            try:
+                line = tuple(int(v) for v in str(rec["line"]).strip("()").split(","))
+            except ValueError:
+                continue
+        else:
+            line = float(rec["line"]) if rec["line"] not in ("", None) else 0.0
+        cc = (m.get("corners") or {}).get("actual") or {}
+        y = kalshi.settle_prop(rec["kind"], rec["side"], line, hs, as_,
+                               hc=cc.get("h"), ac=cc.get("a"))
+        if y is None:
+            continue                      # corners genuinely unknown - retry on a later build
+        rec["result"] = m["result"]; rec["settled"] = "YES" if y else "NO"
+        rec["graded"] = built_at
+        try:
+            mp = float(rec["model"]) / 100.0
+            rec["brier_model"] = round((mp - y) ** 2, 4)
+        except (TypeError, ValueError):
+            pass
+        if rec.get("kal_mid") not in (None, ""):
+            kpv = float(rec["kal_mid"]) / 100.0
+            rec["brier_kalshi"] = round((kpv - y) ** 2, 4)
+            if "brier_model" in rec:
+                rec["closer"] = ("model" if rec["brier_model"] < rec["brier_kalshi"]
+                                 else "kalshi" if rec["brier_kalshi"] < rec["brier_model"] else "tie")
+
     cols = ["key", "gw", "home", "away", "kind", "side", "line", "label", "locked_at",
             "close_at", "model", "kal_at", "kal_mid", "kal_ask",
             "result", "settled", "graded", "brier_model", "brier_kalshi", "closer"]
@@ -489,22 +550,15 @@ def build():
     # RULE 1: refit the ratings every build, folding in any 26/27 results that have finished
     # (from the live feed) so the model updates after each matchday. RULE 3: where a finished
     # game exposes shot data we blend goals with a shots-on-target xG proxy to damp luck.
+    # RULE 3 WAS VALIDATED AND TURNED OFF. Blending a shots-on-target xG proxy into the
+    # training data made out-of-sample RPS monotonically WORSE (goals-only 0.2092, 45% proxy
+    # 0.2102, 100% proxy 0.2141) across 2018-26. SoT x conversion throws away shot quality
+    # entirely, so it is a noisier target than the goals it replaces. Real per-shot xG (now
+    # available per player from FPL each gameweek) is worth re-testing once enough of it has
+    # accumulated; the crude proxy is not.
     finished = [e for e in events if e["finished"] and e["hs"] is not None]
-    extra = None
-    if finished:
-        import pandas as pd
-        rec = []
-        for e in finished:
-            hs, as_ = e["hs"], e["as"]
-            # RULE 3 WAS VALIDATED AND TURNED OFF. Blending a shots-on-target xG proxy into
-            # the training data made out-of-sample RPS monotonically WORSE (goals-only 0.2092,
-            # 45% proxy 0.2102, 100% proxy 0.2141) across 2018-26. SoT x conversion throws away
-            # shot quality entirely, so it is a noisier target than the goals it replaces.
-            # Real per-shot xG (now available per player from FPL each gameweek) is worth
-            # re-testing once enough of it has accumulated; the crude proxy is not.
-            rec.append({"date": e["utc"][:10], "home_team": e["home"], "away_team": e["away"],
-                        "home_score": hs, "away_score": as_})
-        extra = pd.DataFrame(rec)
+    extra = fold_finished(events)
+    if extra is not None:
         print(f"  RULE 1: folding {len(extra)} finished 26/27 results into the refit")
     model = dc.fit(extra=extra, verbose=False)
 
@@ -551,7 +605,9 @@ def build():
 
     form = so.current_form()
     shares = ps.load_shares()
-    strength = read_csv(os.path.join(ROOT, "outputs", "team_strength_index.csv"))
+    # (team_strength_index.csv is NOT read here. It used to be, and the value was never used -
+    #  a dead read of a file built on LAST season's clubs. The live table comes from
+    #  build_strength_2627 below, on this season's clubs with the cold-start shrinkage applied.)
     players = read_csv(os.path.join(ROOT, "outputs", "player_rankings_2026_27.csv"))
     aidx = {t: i for i, t in enumerate(model["teams"])}
 
@@ -800,14 +856,36 @@ def build():
     else:
         held = fpl_transfers.held_squad(active_gw)
         budget, src = 100.0, "model snapshot (no FPL entry id configured)"
+    # A transfer is not a one-week decision, so the planner is given the next gameweeks too and
+    # optimises the decayed total (fpl_transfers.HORIZON / DECAY). Future weeks project from the
+    # same model and the same minutes model; only the fixtures differ.
+    future_rows = []
+    for k in range(1, fpl_transfers.HORIZON):
+        if any(w["gw"] == active_gw + k for w in weeks_raw):
+            future_rows.append(sf.project_gw(active_gw + k, players=fpl_players, model=model,
+                                             shares=shares, weeks=weeks_raw))
+    # FORM vs QUALITY (see fpl_form.py) - built here rather than at render time because the
+    # transfer bar needs it. Failing to build it must not take the planner down with it.
+    try:
+        form_rows, _ = fpl_form.build()
+        for fr in form_rows:
+            fr["quadrant"] = fpl_form.quadrant(fr)
+    except Exception as e:
+        form_rows = []
+        print(f"  form ratings: FAILED ({e})")
+    form_map = {int(f["id"]): float(f["form_adj"]) for f in form_rows if str(f.get("id", "")).isdigit()}
     transfer_plan = (fpl_transfers.plan(active_rows, held, budget=budget, free_transfers=1,
-                                        all_players=fpl_players) if held else None)
+                                        all_players=fpl_players, future_rows=future_rows,
+                                        form=form_map) if held else None)
     if transfer_plan:
         transfer_plan["source"] = src
         transfer_plan["budget"] = budget
     if transfer_plan:
+        transfer_plan["gws"] = [active_gw + k for k in range(len(future_rows) + 1)]
+        transfer_plan["future_gws"] = transfer_plan["gws"][1:]
         print(f"  transfers: {transfer_plan['verdict']}"
-              f" | held XI {transfer_plan['base_xi']} pts, bank {transfer_plan['bank']}m")
+              f" | held XI {transfer_plan['base_xi']} pts this week, bank {transfer_plan['bank']}m"
+              f" | objective = {transfer_plan['horizon']} GW, decay {transfer_plan['decay']}")
     elif held:
         print("  transfers: held squad could not be resolved from this week's player pool")
     else:
@@ -898,18 +976,13 @@ def build():
     data["meta"]["team_locked"] = active_team["locked"]
     data["transfers"] = transfer_plan
     # FORM vs QUALITY, kept separate on purpose - see fpl_form.py. Conflating them is what
-    # makes raw "form" tables recommend the player about to regress.
-    try:
-        form_rows, _ = fpl_form.build()
-        for fr in form_rows:
-            fr["quadrant"] = fpl_form.quadrant(fr)
-        data["form"] = form_rows[:60]
+    # makes raw "form" tables recommend the player about to regress. Built earlier, because the
+    # transfer bar consumes it; this only renders what is already computed.
+    data["form"] = form_rows[:60]
+    if form_rows:
         hot = [f for f in form_rows if f["quadrant"] == "hot elite"][:5]
         print(f"  form ratings: {len(form_rows)} players; hot elite -> "
               + ", ".join(f["name"] for f in hot))
-    except Exception as e:
-        data["form"] = []
-        print(f"  form ratings: FAILED ({e})")
     data["meta"]["reveal_at"] = active_team["reveal_at"]
 
     # RULE 5: record every prediction (with the closing line) BEFORE kickoff, then grade it

@@ -49,7 +49,17 @@ run() {
   fi
 }
 
+# ORDER IS A DEPENDENCY CHAIN, not a preference:
+#   build_rankings   fits the history and writes player_rankings.csv + team_rankings.csv
+#   link_squads      reads BOTH of those and filters them to this season's squads
+#   compute_strength reads player_rankings_2026_27.csv and refits on the LIVE model
+#   build_dashboard  re-derives every player's current club (RULE 10) into the files above,
+#                    so it must run LAST of the four or link_squads undoes the corrections
 run build_player_stats.py     # player xG/xA/xGC/DC + per-gameweek + dated history snapshot
+run team_stats.py             # per-match TEAM stat line + rolling form (needs the player file)
+run "$REPO/build_rankings.py"     # team + player rankings from history  -> outputs/*.csv
+run "$REPO/link_squads.py"        # filter those to the 2026/27 squads
+run "$REPO/compute_strength.py"   # strength index (live model) + top-50 players
 run build_dashboard.py        # refits the model on finished results, relocks ledger + fantasy
 run make_standalone.py        # regenerates the shareable HTML
 

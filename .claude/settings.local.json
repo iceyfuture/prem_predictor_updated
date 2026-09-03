@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"Rule\\\\|^## \\\\|^### \" ~/prem_predictor/dashboard/MODEL_RULES.md | tail -60; echo \"---\"; wc -l ~/prem_predictor/dashboard/MODEL_RULES.md)"
+    ]
+  }
+}

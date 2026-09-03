@@ -9,11 +9,14 @@ by its probability = simulating all outcomes) and turn it into expected FPL poin
   assists    ~0.6 x team goals x share x 3
   clean sheet  P(opponent scores 0) x (GK/DEF 4, MID 1)
   conceded   -0.5 x opponent expected goals  (GK/DEF only)
-  appearance +2 for likely starters (FPL status 'a' and ep_next above a floor)
-  gk saves   small positive proportional to shots faced
+  appearance 1 pt for 1-59 minutes, 2 for 60+, weighted by the minutes model
+  gk saves   small positive proportional to shots faced x share of the match played
 
-Only FIT players (FPL status 'a') are ever projected, so injured/suspended players score 0 and
-drop out of the picks automatically. Output: projected points per player, refreshable per GW.
+Every point above is an expectation over EXPECTED MINUTES (`fpl_minutes.py`), not over a
+"likely XI". The old version cut each club at its top 11 on ep_next and projected everyone
+below the line at exactly 0.0 - see fpl_minutes.py for what that cost and what replaced it.
+Because FPL pays appearance points and clean sheets at a 60-minute threshold, the expectation
+is taken over the minutes STATE distribution rather than evaluated at E[minutes].
 """
 import csv, os, re, sys, unicodedata, json
 import numpy as np
@@ -26,13 +29,14 @@ import supremacy_odds as so        # noqa: E402
 import prem_scorer as ps           # noqa: E402
 import feeds                        # noqa: E402
 import build_dashboard as bd        # noqa: E402
+import fpl_minutes as fm           # noqa: E402
 
 GOAL = {"GK": 6, "DEF": 6, "MID": 5, "FWD": 4}
 CS = {"GK": 4, "DEF": 4, "MID": 1, "FWD": 0}
 POS = {1: "GK", 2: "DEF", 3: "MID", 4: "FWD"}
 FPL2OUR = {"Man Utd": "Man United", "Spurs": "Tottenham", "Coventry City": "Coventry",
            "Hull City": "Hull", "Ipswich Town": "Ipswich"}
-EP_FLOOR = 1.5   # ep_next below this = unlikely starter -> appearance downweighted
+MIN_PLAY = 0.5   # expected minutes below this = not worth carrying a row for
 
 
 def norm(s):
@@ -107,7 +111,7 @@ def fpl_players():
     return out
 
 
-def project_gw(gw, players=None, model=None, shares=None, weeks=None):
+def project_gw(gw, players=None, model=None, shares=None, weeks=None, minutes_model=None):
     if players is None:
         players = fpl_players()
     cold = getattr(project_gw, "_cold", set())
@@ -146,55 +150,69 @@ def project_gw(gw, players=None, model=None, shares=None, weeks=None):
 
     proj = {id(p): 0.0 for p in players}
     playing = set()
+    # Expected minutes for every player at every club, once. The roster constraint (exactly 11
+    # start) is applied inside predict(), AFTER availability, so an injured starter's minutes go
+    # to his own team-mates instead of disappearing.
+    mn = fm.predict(players, gw, model=minutes_model)
     for fx in wk["fixtures"]:
         M, lam_h, lam_a = dc.score_matrix(model, fx["home"], fx["away"])
         cs_home = float(M[:, 0].sum())    # away scored 0
         cs_away = float(M[0, :].sum())    # home scored 0
         for team, lam, opp_lam, csp in [(fx["home"], lam_h, lam_a, cs_home),
                                         (fx["away"], lam_a, lam_h, cs_away)]:
-            fit = [p for p in by_team.get(team, []) if p.get("avail", 0) > 0]
-            if not fit:
+            squad = [p for p in by_team.get(team, []) if mn[p["id"]]["exp_min"] >= MIN_PLAY]
+            if not squad:
                 continue
-            # likely XI: best GK + best 10 outfield by AVAILABILITY-WEIGHTED ep, so a doubt is
-            # ranked below an equivalent fit player rather than excluded outright
-            fit.sort(key=lambda p: -p["ep"] * p.get("avail", 1.0))
-            gk = [p for p in fit if p["pos"] == "GK"][:1]
-            outfield = [p for p in fit if p["pos"] != "GK"][:10]
-            xi = gk + outfield
-            # goal shares among the XI, exact-surname match to historical shares, capped
+            f = {p["id"]: mn[p["id"]]["exp_min"] / 90.0 for p in squad}
             sh = shares.get(team)
             surn = {}
             if sh is not None:
                 for pl, val in sh.items():
                     surn[ps._surname(pl)] = max(surn.get(ps._surname(pl), 0.0), float(val))
-            # historical shares already sum to ~1 across the squad — use directly (capped),
-            # do NOT renormalise to the XI (that hands a promoted team's lone known scorer
-            # ~100% of the goals and inflates him wildly).
-            # THIS SEASON's xG/xA share of the projected XI, as a live alternative to the
-            # historical shares (which cannot see transfers, new signings or a changed role -
-            # the same blind spot that made the team ratings mis-price promoted clubs).
-            sum_xg = sum(q["xg90"] for q in xi) or 0.0
-            sum_xa = sum(q["xa90"] for q in xi) or 0.0
-            for p in xi:
-                hist = min(0.40, surn.get(ps._surname(p["name"]), 0.0))
+            # THIS SEASON's xG/xA share, weighted by expected minutes: a player's slice of the
+            # xG his club is actually expected to generate in THIS match. Minutes are inside the
+            # share, so it must not be applied a second time downstream.
+            sum_xg = sum(q["xg90"] * f[q["id"]] for q in squad) or 0.0
+            sum_xa = sum(q["xa90"] * f[q["id"]] for q in squad) or 0.0
+            # Historical shares already sum to ~1 across the squad, so they are used directly
+            # (capped) and never renormalised - renormalising hands a promoted team's lone known
+            # scorer ~100% of the goals. Expected minutes redistribute them WITHIN the club at a
+            # conserved total, so a demoted regular gives his share to whoever is playing instead
+            # of the whole club quietly losing it.
+            h_raw = {p["id"]: min(0.40, surn.get(ps._surname(p["name"]), 0.0)) for p in squad}
+            tot_h = sum(h_raw.values())
+            wt_h = sum(h_raw[i] * f[i] for i in h_raw)
+            keep = (tot_h / wt_h) if wt_h > 0 else 0.0
+            for p in squad:
+                i = p["id"]
+                hist = h_raw[i] * f[i] * keep
                 w = p["mins"] / (p["mins"] + MIN_K)          # trust in this season's rate
-                cur_g = (p["xg90"] / sum_xg) if sum_xg > 0 else hist
-                cur_a = (p["xa90"] / sum_xa) if sum_xa > 0 else hist
+                cur_g = (p["xg90"] * f[i] / sum_xg) if sum_xg > 0 else hist
+                cur_a = (p["xa90"] * f[i] / sum_xa) if sum_xa > 0 else hist
                 share = min(0.40, (1 - w) * hist + w * cur_g)
                 a_share = min(0.40, (1 - w) * hist + w * cur_a)
-                eg = share * lam
-                ea = 0.6 * lam * a_share
+                # goals and assists are already minutes-weighted through the shares
+                pts = share * lam * GOAL[p["pos"]] + 0.6 * lam * a_share * 3
                 wdc = p["mins"] / (p["mins"] + MIN_K)
                 eff_dc = wdc * p["dc90"] + (1 - wdc) * dc_med.get(p["pos"], 0.0)
-                pts = (2.0 + eg * GOAL[p["pos"]] + ea * 3 + csp * CS[p["pos"]]
-                       + _dc_points(eff_dc, p["pos"]))
-                if p["pos"] in ("GK", "DEF"):
-                    pts -= 0.5 * opp_lam
-                if p["pos"] == "GK":
-                    pts += min(1.6, 0.45 * opp_lam)     # rough saves contribution
+                # everything with a minutes threshold or a per-minute rate is integrated over
+                # the state distribution: FPL pays 1 appearance point under 60 and 2 at 60+, and
+                # a clean sheet only counts for a player who reached 60.
+                for pr, m_, long_ in mn[i]["states"]:
+                    if pr <= 0.0:
+                        continue
+                    sp = 2.0 if long_ else 1.0
+                    if long_:
+                        sp += csp * CS[p["pos"]]
+                    sp += _dc_points(eff_dc, p["pos"], minutes=m_)
+                    if p["pos"] in ("GK", "DEF"):
+                        sp -= 0.5 * opp_lam * (m_ / 90.0)
+                    if p["pos"] == "GK":
+                        sp += min(1.6, 0.45 * opp_lam) * (m_ / 90.0)
+                    pts += pr * sp
                 if team in cold:
                     pts *= 0.70          # promoted-team projections are unreliable; discount
-                proj[id(p)] += max(0.0, pts) * p.get("avail", 1.0)   # scale by chance of featuring
+                proj[id(p)] += max(0.0, pts)
                 playing.add(id(p))
     rows = []
     for p in players:
@@ -203,6 +221,8 @@ def project_gw(gw, players=None, model=None, shares=None, weeks=None):
                          "avail": round(p.get("avail", 1.0), 2),
                          "xg90": round(p.get("xg90", 0.0), 3), "xa90": round(p.get("xa90", 0.0), 3),
                          "dc90": round(p.get("dc90", 0.0), 2), "mins": p.get("mins", 0),
+                         "p_start": round(mn[p["id"]]["p_start"], 3),
+                         "xmin": round(mn[p["id"]]["exp_min"], 1),
                          "proj": round(proj[id(p)], 2)})
     rows.sort(key=lambda r: -r["proj"])
     return rows
@@ -211,8 +231,8 @@ def project_gw(gw, players=None, model=None, shares=None, weeks=None):
 def build_team(gw, players=None, model=None, shares=None, weeks=None, team_meta=None,
                budget=100.0, rows=None):
     """Generate a full FPL squad for ONE gameweek from that week's projections:
-    2 GK / 5 DEF / 5 MID / 3 FWD, <= budget, <= 3 per club, fit players only, tilted to
-    value + low ownership. Then choose the best legal starting XI and captain."""
+    2 GK / 5 DEF / 5 MID / 3 FWD, <= budget, <= 3 per club, expected minutes above zero,
+    tilted to value + low ownership. Then choose the best legal starting XI and captain."""
     if rows is None:
         rows = project_gw(gw, players=players, model=model, shares=shares, weeks=weeks)
     QUOTA = {"GK": 2, "DEF": 5, "MID": 5, "FWD": 3}
@@ -306,9 +326,10 @@ def build_team(gw, players=None, model=None, shares=None, weeks=None, team_meta=
 if __name__ == "__main__":
     gw = int(sys.argv[1]) if len(sys.argv) > 1 else 1
     rows = project_gw(gw)
-    print(f"\nMATCHWEEK {gw} — projected FPL points (fit players only), top by position:\n")
+    print(f"\nMATCHWEEK {gw} — projected FPL points (expected minutes), top by position:\n")
     for pos in ["GK", "DEF", "MID", "FWD"]:
         print(f"== {pos} ==")
         for r in [x for x in rows if x["pos"] == pos][:6]:
-            print(f"  {r['name']:<15}{r['team']:<15}{r['price']:>5.1f}m  proj {r['proj']:>5.2f}  ep {r['ep']:>4}  own {r['own']:>4}%")
+            print(f"  {r['name']:<15}{r['team']:<15}{r['price']:>5.1f}m  proj {r['proj']:>5.2f}"
+                  f"  p_start {r['p_start']:>4.2f}  xmin {r['xmin']:>4.0f}  own {r['own']:>4}%")
         print()

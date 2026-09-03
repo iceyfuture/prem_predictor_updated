@@ -227,7 +227,7 @@ and grading it in the forward test measures a team nobody could have owned.
     an upgrade that changes your captain is valued properly and a bench-only upgrade scores ~0
   * searches 1..3 transfers by beam search, subtracting the -4 hit per transfer beyond the free
     allowance, and reports the net at each count so "is a hit worth it" is visible, not implied
-  * a held player who is injured is dropped by `project_gw` (fit players only) but you STILL
+  * a held player who is injured is dropped by `project_gw` (zero expected minutes) but you STILL
     OWN HIM - he is carried at proj 0.0 from the full FPL list, which both keeps the squad at
     15 and correctly makes him first in line to sell
   * selling price is assumed = current price. Real FPL sells at purchase price plus half the
@@ -278,6 +278,7 @@ Residual limitation, deliberately not fixed here: the likely XI is still a hard 
 a player outside it projects 0 no matter how available he is. Proper handling needs a rotation
 / minutes model rather than a cut-off. The GW2 recommendation was identical before and after
 this change, so it is robust to the simplification.
+**RESOLVED 2026-09-01 — see Rule 19.** The cut is gone.
 
 ### 14. Player projections now use this season's xG / xA / defensive contribution — 2026-08-27
 
@@ -443,3 +444,238 @@ markets; the parsers and pricing are in place for when they list.
 Discipline unchanged: these are LOGGED, not traded. The prop ledger exists to build evidence
 before anything is staked, and every previous "edge" in it collapsed once the top two winners
 were removed.
+
+
+### 19. Expected minutes replace the top-11 cut — 2026-09-01
+
+**The bug this closes.** `project_gw` built each club's "likely XI" by sorting available players
+on availability-weighted `ep_next` and keeping the top 1 GK + 10 outfield. Everyone below the
+line projected **exactly 0.0** — not "less", zero — so a fit, in-form, coin-flip-to-start player
+was valued identically to an injured one. That is a discontinuity at an arbitrary boundary, and
+it is what benched Gibbs-White in weeks he returned points. Rule 13 named it and left it.
+
+Measured on held-out seasons, the cut zeroes **~21,400 player-matches a season, of which 1,813
+actually started and 4,188 played at all** (2025-26; 1,776 / 4,214 in 2024-25) — roughly 1.8 real
+starters per team-match discarded. It was also silently deciding transfers: Thiago had started
+both of this season's games and carried `ep_next` 1.0, so the cut dropped him and the planner
+listed a player the user owns and who plays every week as "unavailable", worth 0.
+
+**What replaced it.** `fpl_minutes.py`: two logistic models — P(start) and P(appear | !start) —
+on recency-weighted prior minutes, price, and price rank inside the club roster, fit on
+2023-24..2025-26 player-gameweeks (86,765 rows). Then the constraint the logistic does not know:
+**exactly 11 players start**, so P(start) is scaled inside each club to sum to 1 (GK) and 10
+(outfield), water-filled at the 1.0 cap. Availability multiplies BEFORE that scaling, so an
+injured starter's minutes are redistributed to his own team-mates rather than vanishing.
+
+Minutes then follow from four empirical constants (started: P(60+) 0.932, E[min] 82.8; sub:
+P(60+) 0.013, E[min] 18.2; 4.11 sub appearances per team-match). Consumers get the whole state
+distribution, because FPL pays 1 appearance point under 60 minutes and 2 at 60+, and a clean
+sheet only counts for a player who reached 60 — thresholds that must be integrated over, not
+evaluated at E[minutes].
+
+**Validated walk-forward** (train on earlier seasons only; baseline credited with the empirical
+P(60+|start) rather than the certainty of 90 minutes the shipped code actually assumed):
+
+| test season | metric | top-11 cut | minutes model |
+|---|---|---|---|
+| 2024-25 | 3-state Brier | 0.4522 | **0.3198** |
+| 2024-25 | 3-state log loss | 2.7718 | **0.5825** |
+| 2024-25 | minutes RMSE | 29.15 | **23.71** |
+| 2025-26 | 3-state Brier | 0.4140 | **0.2902** |
+| 2025-26 | 3-state log loss | 2.5464 | **0.5388** |
+| 2025-26 | minutes RMSE | 28.18 | **22.64** |
+| both, GW<=6 | 3-state Brier | 0.5490 / 0.5299 | **0.3592 / 0.3376** |
+
+The gain is largest in the opening weeks, which is where the season is. Minutes **MAE** goes the
+other way (12.59 -> 15.11) and that is not a defect: minutes are bimodal, MAE is minimised by the
+median, and everything downstream multiplies the expectation — so squared error and the proper
+scoring rules are what bind.
+
+`W_K` (history shrinkage, `w = n/(n+W_K)`) was **swept, and the first guess was wrong**. Set to
+3.0 by analogy with the other shrinkage constants in this project, it predicted 0.67 for players
+who had started both openers against an actual 0.84. Minutes persist far more strongly than
+per-90 rates do. At W_K = 0.25: all-rounds Brier 0.0840 -> 0.0818, GW<=6 0.1077 -> 0.0986 (-8.5%),
+and that cell lands at 0.83 against 0.84.
+
+**Deliberately not included.** Last season's minutes (name-matched from
+`player_season_totals.csv`) improved GW<=6 Brier by ~2%. It needs cross-source name matching,
+which has produced three separate bugs here already (Bruno Fernandes, both Palmers, the two
+Wilsons). Not worth 2%. `ep_next` is also excluded — history does not carry it, so its weight
+cannot be validated; where FPL's ep disagrees with our minutes the disagreement is now visible
+in the `p_start` / `xmin` columns instead of silently deciding the XI.
+
+**Effect on the live GW3 decision:** held XI 58.5 -> 61.0, the "unavailable" list emptied
+(Thiago 0.0 -> 4.5), the captain moved Isak -> Gibbs-White, and the recommended transfer changed
+from **sell Mbeumo -> Gakpo (+0.9)** to **sell Núñez -> Iwobi**. The Mbeumo sale was a
+consequence of the cut, not of the transfer objective.
+
+Also added: `build_player_stats.py` now stores `status`, `chance_next` and `ep_next` in the
+daily roll-forward snapshot. Without them a past gameweek cannot be re-projected from what was
+known before kickoff, which is exactly what a head-to-head between two projection versions
+needs. That test is not possible for GW1/GW2 — those inputs are already gone — and is possible
+from GW3 on.
+
+Refit: `python dashboard/fpl_minutes.py --fit` (writes `.state/fpl_minutes.json`).
+
+### 20. The transfer objective looks past this week — 2026-09-01
+
+`fpl_transfers.plan` optimised a **single gameweek**, which is how it came to recommend selling
+the squad's best in-form player for +0.9: one awkward fixture is enough to tip a fractional
+gain, and the fixture after it never entered the sum. The objective is now the decay-weighted
+XI total (captain doubled, as before) over `HORIZON = 3` gameweeks, `DECAY = 0.65`.
+
+`DECAY` is a judgement, not a swept constant, and is deliberately steep — you get another free
+transfer every week, so a squad three weeks out is only loosely the squad you will own. Hits stay
+a one-time -4, which is the correct economics: the cost lands once, the gain accrues over the
+weeks you hold the player.
+
+Each option reports the **raw gain in every gameweek** (`by_gw`) alongside the weighted score
+(`gross_h`), and the panel shows them as columns, because the weighted number cannot be checked
+otherwise. The first version of that panel showed a one-week gross next to a three-week net, so
+the row did not add up left to right, and the verdict read "net +2.8 pts over 3 GW" — which is
+wrong: 2.8 is the DECAYED score, and the undecayed three-week gain is about 4.0. Both are fixed;
+the panel now spells out Score = GW3x1 + GW4x0.65 + GW5x0.42 and Net = Score - Hit - Form bar.
+
+**Form is a bar, not a bonus.** `fpl_form.form_adj` (this season's underlying output per 90,
+z-scored within position, shrunk by `w = m/(m+900)`) now sets a threshold a move must clear:
+
+    bar = FORM_GUARD * max(0, form_adj(out) - form_adj(in)),  FORM_GUARD = 0.75
+
+It is a threshold rather than something added to the projection because `project_gw` already
+carries part of the same evidence (this season's xG/xA share, at the same shrinkage) and adding
+it twice would double-count. Two things checked rather than assumed:
+
+  * it uses `form_adj` (shrunk), **not** `heat`. At this point in the season `heat` is
+    small-sample noise — the current top 8 by heat have confidence 0.05-0.17, i.e. 45-170
+    minutes — and gating transfers on it is precisely the trap `fpl_form.py` warns about.
+  * `FORM_GUARD` is **not** derived from the observed form-to-points relationship. That
+    regression looks strong (pts90 = 3.6 x form_raw, r = 0.88) and is circular: pts90 is one of
+    `form_raw`'s own inputs. It measures what a player has scored, not what he will score.
+
+**Honest status: the form bar is currently near-inert, by construction.** Two gameweeks in,
+confidence is ~0.13, so `form_adj` spans about +/-0.25 and the bar on any live move is 0.0-0.1
+points. It scales up as minutes accumulate and is worth roughly a point by mid-season. The thing
+that actually stopped the Mbeumo sale was Rule 19, not this.
+
+Robustness: the GW3 recommendation (Núñez -> Iwobi, 1 transfer) is **unchanged** across
+HORIZON 1/2/3, DECAY 0.5/0.65/0.8 and FORM_GUARD 0.0/0.75/2.0. Only the size of the gain moves
+(+1.9 one-week, +3.5 over three).
+
+**Still open, deliberately.** A banked free transfer has option value — FPL banks up to five —
+and the planner still does not price it, so it will recommend a move worth slightly more than
+zero. The honest fix needs a number this project cannot yet ground; the horizon at least means
+that number is now a three-week gain rather than a one-week one.
+
+
+### 21. Team match statistics now have a record — 2026-09-01
+
+The player side of this desk has kept a per-gameweek record since Rule 15
+(`fpl_player_gameweek_2026_27.csv`, plus a dated roll-forward of season totals). **The team side
+had none.** Club ratings were recomputed in memory every build and overwritten, this season's
+results were re-derived from the ESPN feed and discarded, and the 28-stat team line ESPN
+publishes for every finished match was fetched, read for its two corner counts, and thrown away.
+Nothing at team level had a trajectory: you could ask what the model thought of a player on a
+given date and not what it thought of a club.
+
+`team_stats.py` writes it down, and is now step 2 of `refresh.sh` (after the player build, whose
+output it consumes):
+
+| file | what |
+|---|---|
+| `outputs/team_match_2026_27.csv` | one row per team per match, full ESPN stat line + xG/xA |
+| `outputs/team_match_history.csv` | the same core stats per team-match back to 2000-01 (19,760) |
+| `outputs/team_rolling_2026_27.csv` | rolling form AS AT each match, prior matches only |
+| `outputs/team_form_2026_27.csv` | each club's rolling form as of now, one row per club |
+
+**Sources, and the gaps, because they are not one feed.** Shots, shots on target, corners, fouls
+and cards come from ESPN this season and football-data back to 2000-01. Possession, passing,
+crosses, long balls, tackles, interceptions, clearances, blocked shots, saves and **offsides**
+are ESPN-only, so 2026-27 forward. Offsides in particular **cannot be backfilled**: football-data
+never carried it and FPL's `offside` column is populated for three seasons (2016-19) at ~5% of
+rows. Team **xG/xA** is summed from FPL's per-player per-gameweek expected goals, 2023-24 forward
+(2022-23 is half-populated — season total 732 against ~1,100 in full seasons — the same cutoff
+`fpl_minutes.py` uses for `starts`). **xGC is the opponent's xG in the same match**, so xG and
+xGC are one scale by construction. **Free kicks won = the opponent's fouls committed**: no feed
+publishes free kicks, this is the standard proxy, and it is labelled as one. Offsides are
+deliberately not folded into it so the definition is identical in both eras.
+
+**The join is validated against a number neither side was asked for.** FPL also publishes a
+per-player `expected_goals_conceded` — the xG faced while that player was on the pitch — so a
+club's xGC should equal its opponent's xG. It does on **18 of 20** matches this season, within
+0.35; the two that miss are provider rounding on penalty/own-goal xG, and all 20 line up on club
+identity. (Summing that per-player xGC would be badly wrong: a player who lasted 90 minutes
+carries the WHOLE team's figure, so the sum is ~14x the truth. Aston Villa's GW1 read 40.25.)
+
+**Two bugs caught in the first run, both from taking a shortcut:**
+1. Stat blocks were matched to clubs by name, and ESPN's spellings are its own. "Brighton & Hove
+   Albion" did not match "Brighton", so Brighton's entire stat line for one match came out blank
+   while its opponent's filled in. Now: alias table, prefix match, then **block order** as the
+   backstop — verified 20/20 that ESPN puts the home side first — and a printed warning whenever
+   the fallback is used, so an unknown spelling is loud rather than silent.
+2. The rolling window carried back across the season boundary with no age limit, so the form
+   table filled up with Bolton and Portsmouth, and **Hull's "last 6" mixed 2026 matches with
+   2016-17** — they were last in this division a decade ago. Now `MAX_AGE_DAYS = 400`, the table
+   is restricted to this season's 20 clubs, and `l6_n` / `l20_n` report how many matches actually
+   made the window (Hull and Coventry: 2; Arsenal: 6 and 20).
+
+Rolling form is strictly leak-free — a match's own numbers never enter its own rolling columns —
+and uses two windows mirroring the form/quality split in `fpl_form.py`: `l6` is current form,
+`l20` is level. **Neither window is swept**, and should not be described as tuned: there is no
+out-of-sample target these general team stats are fitted to. Where a window IS tuned against an
+outcome, that is `prem_corners.py`, swept to 30.
+
+**Found while doing this:** `outputs/team_rankings.csv`, `team_rankings_2026_27.csv` and
+`team_strength_index.csv` were orphans — nothing called `build_rankings.py`,  `link_squads.py`
+or `compute_strength.py`, so they were frozen at 2026-07-17/22 with `decay 8**(-age/4)` against
+a shipped `DECAY_SPAN` of 3. **Fixed in Rule 22.**
+
+
+### 22. The ranking exports are back in the build — 2026-09-01
+
+Three scripts wrote files that nothing regenerated: `build_rankings.py`, `link_squads.py` and
+`compute_strength.py` were in no build and in no schedule. Their outputs had been sitting at
+17-22 July since before the season started. They are now steps 3-5 of `refresh.sh`, and the
+order is a dependency chain rather than a preference:
+
+    build_player_stats -> team_stats -> build_rankings -> link_squads -> compute_strength
+                                     -> build_dashboard -> make_standalone
+
+`build_rankings` fits the history and writes `player_rankings.csv` + `team_rankings.csv`;
+`link_squads` reads BOTH and filters them to this season's squads; `compute_strength` reads
+`player_rankings_2026_27.csv`; and `build_dashboard` re-derives every player's current club
+(Rule 10) into those same files, so it has to run LAST of the four or `link_squads` silently
+undoes the club corrections. Verified: the whole chain is byte-for-byte idempotent across two
+consecutive runs.
+
+**The decay discrepancy fixed itself.** `build_rankings` already read `dc.DECAY_BASE/DECAY_SPAN`
+rather than hardcoding them — the CSV said `8**(-age/4)` only because it was written when
+`DECAY_SPAN` was 4. Regenerating produces `8**(-age/3)`.
+
+**Two real bugs had to be fixed first, or wiring these in would have shipped wrong numbers daily
+instead of stale ones.**
+
+1. **`compute_strength` was building this season's table out of last season's league.** It
+   called `dc.get_model()` — the plain historical fit, no Rule 1 fold of this season's results,
+   no Rule 4 cold-start shrinkage — over a hardcoded `season == "2025-26"` club filter. The
+   output contained **Burnley, West Ham and Wolves, all relegated**, and was missing
+   **Coventry, Hull and Ipswich, all promoted**. It now refits through
+   `build_dashboard.live_model()`, over the clubs in this season's fixture list, and carries a
+   `provisional` column. It agrees with `dashboard.json` on the net strength of all 20 clubs to
+   4dp, where before it disagreed about which clubs were even in the division.
+
+2. **`build_dashboard` was reading the stale file and throwing the result away.** Line 554 did
+   `strength = read_csv(.../team_strength_index.csv)` and `strength` was never used again — the
+   rendered table has always come from `build_strength_2627()`. A dead read of a wrong file is
+   the kind of thing that looks load-bearing the moment someone tries to use it, so it is gone.
+
+Rule 1's fold is now a function, `build_dashboard.fold_finished(events)`, with `live_model()`
+wrapping it and `apply_cold_start` together. `compute_strength` calls that rather than keeping a
+second copy of Rule 1 that can drift from the first — which is exactly how these files got out
+of step in the first place.
+
+**Known limitation, not fixed:** `team_rankings_2026_27.csv` contains **18 clubs, not 20**.
+`link_squads` filters the fitted ranking to this season's squads, and Coventry and Hull have no
+matches in the 8-year window, so they have nothing to filter down to. The file is honest about
+what it is — a filtered historical fit — but it is not the current-season team table. That is
+`team_strength_index.csv`, which now covers all 20 with cold-start priors and flags the two as
+provisional. Use that one.

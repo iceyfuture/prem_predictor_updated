@@ -313,7 +313,7 @@
       </section>
       <section class="disclosure-item">
         <button type="button" class="disclosure-trigger" aria-expanded="false" aria-controls="fantasy-transfers-panel">
-          <span><b>Transfers</b><small>What 1 free transfer actually buys you this week</small></span><i aria-hidden="true"></i>
+          <span><b>Transfers</b><small>What your free transfer buys, week by week</small></span><i aria-hidden="true"></i>
         </button>
         <div class="disclosure-panel" id="fantasy-transfers-panel" hidden><div id="transfers"></div></div>
       </section>
@@ -685,19 +685,33 @@ function renderTransfers(){
   if(!t){el.innerHTML='<p class="panel-hint">No squad held yet \u2014 this week you draft from scratch, so the XI above <b>is</b> the advice.</p>';return;}
   const inj=(t.unavailable&&t.unavailable.length)
     ? `<p class="panel-hint">Carrying at 0 pts (injured/unavailable): <b>${t.unavailable.map(esc).join(', ')}</b> \u2014 first in line to sell.</p>`:'';
+  const H=t.horizon||1, GWS=(t.gws||[]), W=(t.weights||[]);
+  const sg=v=>(v>=0?'+':'')+(+v).toFixed(1);
   const rowsHtml=t.options.map(o=>{
     const mv=o.moves.length?o.moves.map(m=>`${esc(m.out)} \u2192 ${esc(m.in)}`).join('; '):'do nothing';
     const best=o.n===t.best.n;
-    return `<tr${best?' style="background:rgba(0,255,133,.07)"':''}><td>${o.n}</td><td>${o.gross>=0?'+':''}${o.gross}</td>
-      <td>${o.hit?('\u2212'+o.hit):'0'}</td><td><b>${o.net>=0?'+':''}${o.net}</b></td><td>${mv}${best?' <span class="kbadge candidate">take</span>':''}</td></tr>`;
+    const per=(o.by_gw||[o.gross]).map(v=>`<td>${sg(v)}</td>`).join('');
+    const gh=(o.gross_h===undefined?o.gross:o.gross_h), bar=(o.bar||0);
+    return `<tr${best?' style="background:rgba(0,255,133,.07)"':''}><td>${o.n}</td><td>${mv}${best?' <span class="kbadge candidate">take</span>':''}</td>
+      ${per}<td>${sg(gh)}</td><td>${o.hit?('\u2212'+o.hit):'0'}</td><td>${bar?('\u2212'+bar.toFixed(1)):'0'}</td>
+      <td><b>${sg(o.net)}</b></td></tr>`;
   }).join('');
+  const gwHead=GWS.map(g=>`<th>GW${g}</th>`).join('') || '<th>This GW</th>';
+  const wTxt=GWS.map((g,i)=>`GW${g}\u00D7${(W[i]!==undefined?W[i]:1)}`).join(' + ');
   el.innerHTML=`<p class="human-summary">${esc(t.verdict)}</p>
     <p class="panel-hint">You hold last week's squad and get <b>${t.free_transfers}</b> free transfer; each extra costs <b>\u22124 pts</b>.
-      Held XI projects <b>${t.base_xi}</b> pts (captain doubled). Bank \u00A3<b>${t.bank}</b>m.</p>${inj}
-    <table class="ktab"><thead><tr><th>Moves</th><th>Gross</th><th>Hit</th><th>Net</th><th>Plan</th></tr></thead>
+      Held XI projects <b>${t.base_xi}</b> pts in GW${GWS[0]} (captain doubled). Bank \u00A3<b>${t.bank}</b>m.</p>${inj}
+    <table class="ktab"><thead><tr><th>#</th><th>Plan</th>${gwHead}<th>Score</th><th>Hit</th><th>Form bar</th><th>Net</th></tr></thead>
     <tbody>${rowsHtml}</tbody></table>
-    <p class="panel-hint">Net is what you actually gain after the hit. The XI shown above is the squad you can
-      <b>reach</b> from what you hold \u2014 not a from-scratch draft you could never own.</p>`;
+    <p class="panel-hint"><b>Read it left to right:</b> the GW columns are the points each move gains
+      <i>in that week</i>. <b>Score</b> weights them into one number \u2014 ${wTxt} \u2014 because a transfer is not a
+      one-week decision but a squad three weeks out is only loosely the squad you will own. <b>Net = Score \u2212 Hit \u2212 Form bar</b>,
+      and the best Net is the plan to take.</p>
+    <p class="panel-hint">Two cautions. <b>Score is not "points over ${H} gameweeks"</b> \u2014 the later weeks are discounted, so the
+      raw ${H}-week total is larger than the number shown. And the <b>form bar</b> \u2014 an extra threshold for selling a player
+      outscoring his own baseline \u2014 is near zero everywhere this early, by design: form is shrunk on minutes and two
+      matchweeks is not enough to trust it. It grows to about a point by mid-season.
+      The XI shown above is the squad you can <b>reach</b> from what you hold \u2014 not a from-scratch draft you could never own.</p>`;
 }
 function renderChips(){
   const c=DATA.chips; if(!c||!$('chips'))return;

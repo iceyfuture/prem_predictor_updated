@@ -10,12 +10,25 @@ Team strength index is derived from the Dixon-Coles ratings:
   * recent-form supremacy shown alongside (transient, not part of the index)
 
 Writes outputs/team_strength_index.csv and outputs/top50_players.csv.
+
+MODEL VINTAGE (fixed 2026-09-01). This used to call `dc.get_model()` - the plain historical fit,
+with no RULE 1 fold of this season's results and no RULE 4 cold-start shrinkage - over
+`last_season_teams()`, a hardcoded `season == "2025-26"` filter. For 2026-27 that produced a
+table containing Burnley, West Ham and Wolves, all relegated, and missing Coventry, Hull and
+Ipswich, all promoted. It now refits through `build_dashboard.live_model()`, the same call the
+dashboard itself makes, over the clubs in this season's fixture list - so this file agrees with
+the desk instead of quietly contradicting it, and promoted clubs carry `provisional = True`
+rather than a rating they have not earned.
 """
-import csv, os
+import csv, os, sys
 import numpy as np
 import pandas as pd
 import prem_dixon_coles as dc
 import supremacy_odds as so
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard"))
+import feeds                       # noqa: E402
+import build_dashboard as bd       # noqa: E402
 
 def _history(name):
     """Locate a file from the premier_league_history dataset.
@@ -37,15 +50,10 @@ OUT = os.path.join(HERE, "outputs")
 RESULTS = _history("results.csv")
 
 
-def last_season_teams():
-    df = pd.read_csv(RESULTS)
-    s = df[df.season == "2025-26"]
-    return sorted(set(s.home_team) | set(s.away_team))
-
-
 def build_team_index():
-    model = dc.get_model()
-    teams = last_season_teams()
+    """This season's 20 clubs, on the live model - see MODEL VINTAGE in the docstring."""
+    events = feeds.espn_events()
+    model, teams, cold = bd.live_model(events)
     ai = {t: i for i, t in enumerate(model["teams"])}
     a = np.array(model["attack"]); d = np.array(model["defense"])
     form = so.current_form()
@@ -69,14 +77,16 @@ def build_team_index():
                      "proj_points": round(pts, 1),
                      "proj_gf": round(gf, 1), "proj_ga": round(ga, 1),
                      "proj_gd": round(gf - ga, 1),
-                     "form_last6": int(form.get(t, 0))})
+                     "form_last6": int(form.get(t, 0)),
+                     "provisional": t in cold})
     rows.sort(key=lambda r: -r["proj_points"])
     top = rows[0]["proj_points"]
     for k, r in enumerate(rows, 1):
         r["rank"] = k
         r["strength_index"] = round(100 * r["proj_points"] / top, 1)
     cols = ["rank", "team", "strength_index", "proj_points", "proj_gd",
-            "attack", "defense", "net_strength", "proj_gf", "proj_ga", "form_last6"]
+            "attack", "defense", "net_strength", "proj_gf", "proj_ga", "form_last6",
+            "provisional"]
     with open(os.path.join(OUT, "team_strength_index.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols); w.writeheader()
         for r in rows:
@@ -97,13 +107,14 @@ def top_players(n=50):
 
 if __name__ == "__main__":
     teams = build_team_index()
-    print("TEAM STRENGTH INDEX (last season's 20 clubs, Dixon-Coles)\n")
+    print("TEAM STRENGTH INDEX (this season's clubs, live model)\n")
     print(f"{'#':>2}  {'team':<15}{'index':>6}{'proj pts':>9}{'proj GD':>8}"
-          f"{'atk':>7}{'def':>7}{'form':>6}")
+          f"{'atk':>7}{'def':>7}{'form':>6}  flag")
     for r in teams:
         print(f"{r['rank']:>2}  {r['team']:<15}{r['strength_index']:>6.1f}"
               f"{r['proj_points']:>9.1f}{r['proj_gd']:>+8.1f}{r['attack']:>+7.2f}"
-              f"{r['defense']:>+7.2f}{r['form_last6']:>+6d}")
+              f"{r['defense']:>+7.2f}{r['form_last6']:>+6d}"
+              f"  {'PROV' if r['provisional'] else ''}")
     pl = top_players(50)
     print(f"\nTOP {len(pl)} PLAYERS (recency-weighted, currently in the Prem)\n")
     for r in pl:
