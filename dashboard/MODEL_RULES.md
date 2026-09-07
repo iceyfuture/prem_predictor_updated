@@ -747,3 +747,33 @@ own out-of-sample test, not an assumption. The index sits alongside it.
 
 Runs on every build (`refresh.sh`), and `finished_rounds()` auto-detects new matchweeks, so it
 picks up MW4 with no edit.
+
+### 21. Corner probabilities were Poisson; corners are not — 2026-09-07
+
+The live 60-75% probability band was reading 65.7% predicted against 50.0% actual. Tested first
+rather than fixed: **z = -1.59 on n=29, NOT significant**, and the breakdown showed totals (17 of
+the 29) were well calibrated at 66.5% vs 64.7%. The band was not broken. Five corner props were.
+
+Testing those where the sample is large found something real. Across **19,760 team-matches**
+(2000-01 to 2025-26) team corners have **variance/mean = 1.665**, where a Poisson requires
+exactly 1.0. Corners are over-dispersed, so pricing P(>= N) off a Poisson over-states the common
+lines and under-states the tails:
+
+        line   actual   Poisson    NegBinom
+         3+     83.5%    90.4%       83.7%
+         4+     70.9%    78.5%       71.0%
+         5+     57.0%    62.5%       56.9%
+         8+     22.2%    17.7%       21.9%
+        10+      9.7%     4.8%        9.5%
+
+    mean absolute calibration error   4.74pt  ->  0.24pt
+
+The 4+/5+ lines are exactly where a 60-75% quote sits, which is why the failure surfaced in that
+band. The band was the symptom; the distribution was the cause.
+
+`_pois` is now a negative binomial with `DISPERSION = 1.665`, giving variance = mu * 1.665 via
+r = mu/(dispersion - 1). Measured, not assumed - and stable across 26 years (1.576 / 1.652 /
+1.671 / 1.696 / 1.751 by era), so it is a property of football rather than a fit to one period.
+
+**`expected()` is untouched**, so Rule 8's validated +7.7% MAE over the naive baseline still
+stands - only the distribution around the mean changed, not the mean.

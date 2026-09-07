@@ -87,9 +87,43 @@ def expected(model, home, away):
     return (hf + aa) / 2.0, (af + ha_) / 2.0
 
 
-def _pois(lam, k=MAXC):
+# Corner counts are OVER-DISPERSED. Across 19,760 team-matches (2000-01 to 2025-26) the
+# variance/mean ratio is 1.665, where a Poisson requires exactly 1.0. Pricing P(>= N) off a
+# Poisson therefore over-states the common lines and under-states the tails:
+#
+#        line   actual   Poisson    gap
+#         3+     83.5%    90.4%    -6.9pt
+#         4+     70.9%    78.5%    -7.6pt
+#         5+     57.0%    62.5%    -5.4pt
+#         8+     22.2%    17.7%    +4.5pt
+#        10+      9.7%     4.8%    +4.9pt
+#
+# That is exactly the failure seen live: the 60-75% probability band, which is where the 4+/5+
+# lines sit, came in at 20% actual on the corner props. The band was not the problem - the
+# distribution was.
+#
+# A negative binomial has variance = mu + mu^2/r, so r = mu / (ratio - 1) reproduces the
+# observed dispersion. Fitted once from the data rather than assumed.
+DISPERSION = 1.665           # variance / mean, measured on 19,760 team-matches
+
+
+def _nbinom(lam, k=MAXC, dispersion=DISPERSION):
+    """P(X = 0..k) for a negative binomial with mean `lam` and the measured over-dispersion.
+    Falls back to Poisson if dispersion <= 1 (nothing to correct)."""
+    lam = max(lam, 1e-6)
     ks = np.arange(k + 1)
-    return np.exp(-lam + ks * np.log(max(lam, 1e-6)) - np.array([lgamma(i + 1) for i in ks]))
+    if dispersion <= 1.0:
+        return np.exp(-lam + ks * np.log(lam) - np.array([lgamma(i + 1) for i in ks]))
+    r = lam / (dispersion - 1.0)                  # matches variance = lam * dispersion
+    logp = (np.array([lgamma(i + r) - lgamma(r) - lgamma(i + 1) for i in ks])
+            + r * np.log(r / (r + lam)) + ks * np.log(lam / (r + lam)))
+    out = np.exp(logp)
+    return out / out.sum()
+
+
+def _pois(lam, k=MAXC):
+    """Kept as the name the pricing code calls; now negative-binomial under the hood."""
+    return _nbinom(lam, k)
 
 
 def price(model, home, away):
