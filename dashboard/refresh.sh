@@ -57,6 +57,7 @@ run() {
 #                    so it must run LAST of the four or link_squads undoes the corrections
 run build_player_stats.py     # player xG/xA/xGC/DC + per-gameweek + dated history snapshot
 run team_stats.py             # per-match TEAM stat line + rolling form (needs the player file)
+run fotmob.py                 # FotMob xG / xGOT / big chances + the xG strength index
 run "$REPO/build_rankings.py"     # team + player rankings from history  -> outputs/*.csv
 run "$REPO/link_squads.py"        # filter those to the 2026/27 squads
 run "$REPO/compute_strength.py"   # strength index (live model) + top-50 players

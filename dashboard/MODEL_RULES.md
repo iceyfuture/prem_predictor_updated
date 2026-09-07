@@ -708,3 +708,42 @@ games are untouched; only the stale cases move.
 Cards now print "(2 games)" when fewer than six contributed. This was never cosmetic: the value
 feeds the supremacy blend, which was fitted on contiguous in-season form and had no business
 being handed a result from 2001.
+
+### 20. FotMob team stats + an xG strength index — 2026-09-07
+
+`team_stats.py` already records a per-match team line from ESPN, and keeps it. What ESPN does
+not publish is the measure that separates a good performance from a lucky one: **expected
+goals**. `team_stats.py` derives team xG second-hand by summing FPL's per-player xG (2023-24
+forward only). FotMob publishes it directly, plus several things nothing else here carries:
+
+    xG, xG open play, xG set play, xG non-penalty
+    xGOT (post-shot xG)          shot quality AFTER it leaves the boot - separates finishing
+                                 and goalkeeping from chance creation
+    big chances / missed         FotMob's own high-quality-chance count
+    shots inside / outside box   location, not just volume
+    touches in opposition box    territory where it matters
+    duels, dribbles, sprints, distance covered
+
+`fotmob.py` pulls `api/data/matchDetails` per fixture (ids from `api/data/leagues?id=47`),
+caches each match for 30 days since a finished stat line never changes, and writes
+`outputs/team_fotmob_2026_27.csv` — one row per team per match, 42 columns.
+
+**The index.** Attack and defence are fit by ridge least squares on xG:
+
+    xg_for(i vs j, home) = attack_i - defence_j + home_adv
+
+The Dixon-Coles structure, solved on expected goals instead of scored ones. Over three matches
+a 4-0 and a 1-0 are both a win and say very different things; xG accumulates from every chance
+and so says more per match played. RIDGE = 1.0 because 60 rows cannot support 41 confident
+parameters. Home advantage comes out at **+0.71 xG**.
+
+Bug caught by sanity-checking the output: `defence` is solved with a minus sign in the design
+matrix, so a high value already means "concedes less". Negating it on the way out inverted the
+whole table and put Arsenal - the best xGA in the league by a distance - **20th**.
+
+**This is a measurement, not a change to the match model.** The Dixon-Coles predictor is
+validated walk-forward on goals; swapping its training target to xG is a change that needs its
+own out-of-sample test, not an assumption. The index sits alongside it.
+
+Runs on every build (`refresh.sh`), and `finished_rounds()` auto-detects new matchweeks, so it
+picks up MW4 with no edit.
