@@ -913,3 +913,30 @@ flattering to the model:
 236 points, beating the recommended squad in all three graded weeks. The largest single leak is
 visible in the same table: **26 points left on the bench in GW2**, more than any transfer
 decision has been worth.
+
+### 27. Ask the analyst — 2026-09-13
+
+A chat panel in the fantasy tab. The page asks Claude directly through the `sample` runtime
+capability: no API key exists anywhere in the page, and the call runs on the viewer's own Claude
+account with their per-call consent.
+
+**It only works in the Claude artifact.** `claude.use('sample')` resolves null on the GitHub
+Pages copy, and the panel hides itself there rather than offering a box that does nothing. Two
+surfaces, one HTML file.
+
+Claude is memory-less per call, so the page supplies everything. `analystContext()` compacts the
+desk into ~8,900 characters: the next 14 fixtures with model and market probabilities, xG and
+edge grade; all 20 strength ratings; the top 18 form/quality rows; the viewer's own FPL history,
+squad, transfer options and chip values; and the settled track record.
+
+**The caveats are part of the prompt, not decoration.** A chatbot bolted onto a prediction model
+will cheerfully tell you what to bet. This one is told, in the same breath as the data, that the
+model does not beat the market on 1X2 (blending toward the closing line improved the score at
+every weight over 1,893 matches), that every apparent betting profit collapsed once its two
+luckiest tickets were removed, that promoted clubs are provisional, and that its genuine value is
+FPL selection and team corners. It is instructed never to advise a bet and never to present a
+model-market disagreement as an edge.
+
+Streams via `onText`, has a Stop button backed by an AbortController, keeps the last 8 turns for
+context, and branches on the documented error codes - `not_granted` hides the feature,
+`rate_limited` asks the user to wait, `cancelled` is not an error.
