@@ -1011,19 +1011,20 @@ function closeDock(){
 // The chat needs the artifact runtime; this is what the public copy offers instead.
 var ARTIFACT_URL = 'https://claude.ai/code/artifact/49d53a94-6c40-4001-8549-0676ff9edb9a';
 
-function offerArtifactInstead(){
+// Keep the launcher, say why the chat is off, and offer a way on where there is one.
+// `link` is null when the viewer is already on the page we would link to.
+function explainNoChat(msg, link){
   $('chatfab').hidden = false;
   // Explain inside the dock rather than firing a surprise new tab on first click
   $('chatsuggest').hidden = true;
   document.querySelector('.chatbar').hidden = true;
   $('chatlog').innerHTML =
-    '<div class="msg bot"><span class="who">Analyst</span>' +
-    'The chat runs on the Claude version of this desk, where each question goes to your own ' +
-    'Claude account. It cannot run on this public page - that would mean putting an API key ' +
-    'into a page anyone can read.\n\nEverything else here is the same data.</div>' +
-    '<a class="artifact-link" href="' + ARTIFACT_URL + '" target="_blank" rel="noopener">' +
-    'Open the desk on Claude \u2197</a>';
-  $('chatnote').textContent = 'You need a Claude account for the chat. The dashboard itself stays open to everyone.';
+    '<div class="msg bot"><span class="who">Analyst</span>' + esc(msg) + '</div>' +
+    (link ? '<a class="artifact-link" href="' + esc(link) + '" target="_blank" rel="noopener">'
+            + 'Open the desk on Claude \u2197</a>' : '');
+  $('chatnote').textContent = link
+    ? 'You need a Claude account for the chat. The dashboard itself stays open to everyone.'
+    : 'Only the chat needs an account. Fixtures, results and the model are open to everyone.';
 }
 
 async function initAnalyst(){
@@ -1044,17 +1045,27 @@ async function initAnalyst(){
   var sample = null;
   try{ sample = window.claude ? await window.claude.use('sample') : null; }catch(e){ sample = null; }
   if(!sample){
+    // Two different dead ends, and BOTH must say so out loud. Hiding the launcher is what
+    // made the chat look broken rather than unavailable.
     if(window.claude){
-      // We ARE in the artifact and the viewer declined consent. Offering the link here would
-      // point at the page they already have open, so just take the launcher away.
-      fab.hidden = true; closeDock(); dock.hidden = true;
+      // In the artifact, but sampling did not resolve. That is a signed-out viewer as often
+      // as a declined prompt - the two are indistinguishable here - and a signed-out viewer
+      // is how everyone arrives the first time. Linking out would point at this same page,
+      // so explain instead.
+      explainNoChat(
+        'The chat needs you signed in to Claude, because each question runs on the viewer\'s ' +
+        'own account rather than on a key baked into this page.\n\nSign in and reload and the ' +
+        'analyst turns on. Everything else here works without signing in.', null);
       return;
     }
     // Static copy (GitHub Pages). Sampling is an artifact runtime capability, so it does not
-    // exist anywhere on this origin and no retry will change that. Rather than a dead button,
-    // point people at the artifact, where the chat runs on the viewer's own Claude account -
-    // nothing for us to host, and no API key sitting in a page anyone can read.
-    offerArtifactInstead();
+    // exist anywhere on this origin and no retry will change that - send people to the
+    // artifact, where the chat runs on their own Claude account. Nothing for us to host, and
+    // no API key sitting in a page anyone can read.
+    explainNoChat(
+      'The chat runs on the Claude version of this desk, where each question goes to your own ' +
+      'Claude account. It cannot run on this public page - that would mean putting an API key ' +
+      'into a page anyone can read.\n\nEverything else here is the same data.', ARTIFACT_URL);
     return;
   }
   window.__sample = sample;
