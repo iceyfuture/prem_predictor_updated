@@ -321,11 +321,14 @@ def record_props_ledger(weeks, built_at):
                            "label": p_["label"], "locked_at": built_at,
                            "result": "", "settled": "", "graded": ""}
                 if not started:      # refresh both closing prices until kickoff, then freeze
-                    rec["model"] = p_["model"]
-                    rec["close_at"] = built_at
+                    # timestamp-on-change, see the note in record_ledger above
+                    if not _same(rec, ("model",), (p_["model"],)):
+                        rec["model"] = p_["model"]
+                        rec["close_at"] = built_at
                     if p_["mid"] is not None and not p_["thin"]:
-                        rec["kal_mid"], rec["kal_ask"] = p_["mid"], p_["ask"]
-                        rec["kal_at"] = built_at
+                        if not _same(rec, ("kal_mid", "kal_ask"), (p_["mid"], p_["ask"])):
+                            rec["kal_mid"], rec["kal_ask"] = p_["mid"], p_["ask"]
+                            rec["kal_at"] = built_at
                 if m["finished"] and m["result"] and not rec.get("graded"):
                     hs, as_ = (int(x) for x in m["result"].split("-"))
                     # a correct-score line is the (home, away) pair, not a number
@@ -431,6 +434,16 @@ def record_props_ledger(weeks, built_at):
                       for r in sorted(settled, key=lambda x: (-int(x["gw"]), x["home"]))[:60]]}
 
 
+def _same(rec, keys, vals):
+    """Has a stored ledger field actually changed?
+
+    Rows read back from CSV are all strings ('80'), while the model yields ints and floats (80).
+    A naive != is therefore always true, which restamps every row on every build - the exact
+    churn this comparison exists to prevent. Compare on the string form that will be written.
+    """
+    return all(str(rec.get(k, "")) == str("" if v is None else v) for k, v in zip(keys, vals))
+
+
 def record_ledger(weeks, built_at):
     """RULE 5 + Kalshi forward test.
 
@@ -461,16 +474,25 @@ def record_ledger(weeks, built_at):
             rec["kickoff"] = m["time"]          # may move with TV picks; key stays stable
             started = m["finished"] or m["live"]
             if not started:
-                # refresh the CLOSING numbers on every build until the game starts
-                rec["close_h"], rec["close_d"], rec["close_a"] = m["ph"], m["pd"], m["pa"]
-                rec["close_at"] = built_at
+                # Refresh the CLOSING numbers on every build until the game starts - but only
+                # move the TIMESTAMP when a number actually moved. Stamping unconditionally
+                # rewrote 343 of 381 rows on every single run with nothing but a new clock
+                # reading, which is what made the CI push conflict every time: two writers
+                # touching 343 identical-but-restamped lines cannot be auto-merged, and a CSV
+                # has no sensible line merge. Timestamp-on-change makes a quiet build a no-op.
+                if not _same(rec, ("close_h", "close_d", "close_a"), (m["ph"], m["pd"], m["pa"])):
+                    rec["close_h"], rec["close_d"], rec["close_a"] = m["ph"], m["pd"], m["pa"]
+                    rec["close_at"] = built_at
                 if m["mkt"]:
                     rec["line_h"] = round(m["mkt"]["imp"]["h"] * 100, 1)
                     rec["line_d"] = round(m["mkt"]["imp"]["d"] * 100, 1)
                     rec["line_a"] = round(m["mkt"]["imp"]["a"] * 100, 1)
                 if k and not k.get("thin") and k["mid"]["h"] is not None:
-                    rec["kal_h"], rec["kal_d"], rec["kal_a"] = k["mid"]["h"], k["mid"]["d"], k["mid"]["a"]
-                    rec["kal_vig"] = k["vig"]; rec["kal_at"] = built_at; rec["kal_url"] = k["url"]
+                    if not _same(rec, ("kal_h", "kal_d", "kal_a"),
+                                 (k["mid"]["h"], k["mid"]["d"], k["mid"]["a"])):
+                        rec["kal_h"], rec["kal_d"], rec["kal_a"] = k["mid"]["h"], k["mid"]["d"], k["mid"]["a"]
+                        rec["kal_at"] = built_at
+                    rec["kal_vig"] = k["vig"]; rec["kal_url"] = k["url"]
             if m["finished"] and m["result"] and not rec.get("graded"):
                 hs, as_ = (int(x) for x in m["result"].split("-"))
                 out = "H" if hs > as_ else ("D" if hs == as_ else "A")

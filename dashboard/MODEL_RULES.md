@@ -963,3 +963,33 @@ What was deliberately NOT done, and why: `git checkout --theirs` on a rebase, or
 These files are the evidence log - dropping rows to make a push succeed would quietly corrupt
 the only record of what the model predicted and when. A failed push is recoverable; a silently
 truncated ledger is not.
+
+### 29. The ledgers were rewriting themselves every build — 2026-09-13
+
+The CI push kept failing with an unresolvable conflict in `ledger.csv` and `props_ledger.csv`.
+The commit said why: **9,324 insertions and 9,324 deletions** - equal counts, i.e. the whole
+file rewritten, every run.
+
+It was not line endings and not row order (verified: two consecutive local builds produced
+byte-identical files, stable key order). Comparing the committed blob against a fresh build,
+exactly two columns differed:
+
+    close_at   343 rows   '2026-09-13T04:02+00:00' -> '2026-09-13T04:15+00:00'
+    kal_at      13 rows   same
+
+Only **timestamps**. Rule 5 refreshes the closing prediction until kickoff and was stamping
+`built_at` on every pre-kickoff row on every build, whether or not a single number had moved.
+343 lines of pure clock noise per run - and two writers touching 343 identical-but-restamped
+lines is a conflict git cannot resolve, because a CSV has no sensible line-level merge.
+
+Now the timestamp moves only when a value moves. The comparison goes through `_same()`, which
+normalises to string first: rows read back from CSV are all strings (`'80'`) while the model
+yields ints (`80`), so a naive `!=` is always true and restamps everything - the first attempt
+at this fix did exactly that and doubled the churn.
+
+    ledger.csv     686 -> 0 changed lines between builds a minute apart
+    props_ledger  5576 -> 14   (real price movements, still recorded)
+
+This is the actual fix for the CI conflicts. Rule 28's sync-before-build and rebuild-on-race
+remain as the backstop for a genuine simultaneous write, but there is now almost nothing to
+collide over.
