@@ -48,6 +48,16 @@ jobs:
       - name: Install dependencies
         run: pip install -q -r requirements.txt
 
+      # Get any commits made since this run started BEFORE building. The ledgers are keyed
+      # append-style files that the build reads, updates and rewrites - so if it builds on a
+      # stale copy, the push afterwards collides and git cannot auto-merge a CSV. Pulling
+      # first means the build starts from the newest ledgers and the push is a fast-forward.
+      - name: Sync before building
+        run: |
+          git config user.name  "prem-predictor-bot"
+          git config user.email "actions@github.com"
+          git pull --ff-only origin main || git pull --rebase --autostash origin main
+
       # The API response cache. Without it every run refetches per-match stats from scratch,
       # which is what turned some local runs into 90-minute jobs.
       - name: Restore API cache
@@ -96,11 +106,26 @@ jobs:
       # Actions runners are wiped every time.
       - name: Commit the evidence log
         run: |
-          git config user.name  "prem-predictor-bot"
-          git config user.email "actions@github.com"
+          set -e
           git add -A outputs dashboard/*.csv dashboard/refresh_status.json .state || true
-          git diff --cached --quiet || git commit -m "refresh $(date -u '+%Y-%m-%d %H:%M UTC')"
-          git push || (git pull --rebase --autostash && git push)
+          git diff --cached --quiet && { echo "nothing changed"; exit 0; }
+          git commit -q -m "refresh $(date -u '+%Y-%m-%d %H:%M UTC')"
+          if git push; then exit 0; fi
+
+          # Someone pushed while we were building. A CSV cannot be auto-merged, and picking a
+          # side would silently drop whichever ledger rows lost - these files ARE the evidence
+          # log, so that is the one thing not to do. Instead: take the newest ledgers, then
+          # re-run the build so this run's rows are re-applied on top of them. The build is
+          # idempotent and keyed, so replaying it is exactly the right merge.
+          echo "push rejected - rebuilding on top of the newest ledgers"
+          git reset --hard HEAD~1
+          git fetch origin main
+          git reset --hard origin/main
+          python dashboard/build_dashboard.py
+          python dashboard/make_standalone.py
+          git add -A outputs dashboard/*.csv dashboard/refresh_status.json .state || true
+          git diff --cached --quiet || git commit -q -m "refresh $(date -u '+%Y-%m-%d %H:%M UTC') (rebuilt after race)"
+          git push
 
       - name: Package the dashboard for Pages
         run: |

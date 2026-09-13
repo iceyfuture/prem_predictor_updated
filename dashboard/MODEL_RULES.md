@@ -940,3 +940,26 @@ model-market disagreement as an edge.
 Streams via `onText`, has a Stop button backed by an AbortController, keeps the last 8 turns for
 context, and branches on the documented error codes - `not_granted` hides the feature,
 `rate_limited` asks the user to wait, `cancelled` is not an error.
+
+### 28. The CI push race — 2026-09-13
+
+Run #2 built cleanly (the FotMob switch worked) and then failed on **Commit the evidence log**.
+Cause: the ledgers are keyed, append-style CSVs that the build reads, updates and rewrites. If
+another commit lands while a run is building, the push is rejected and git cannot auto-merge a
+CSV - there is no sensible line-level merge of `ledger.csv`.
+
+Fixed by removing the race rather than resolving it:
+
+1. **Sync before building.** A `git pull` right after checkout means the build starts from the
+   newest ledgers, so the push afterwards is a fast-forward. This covers the ordinary case, where
+   a commit landed between the run starting and the build finishing.
+2. **On a genuine race, rebuild instead of choosing a side.** If the push is still rejected, the
+   run resets to `origin/main` - taking the newest ledgers - and re-runs `build_dashboard`. The
+   build is idempotent and keyed, so replaying it re-applies this run's rows on top of whatever
+   arrived. That IS the correct merge for these files.
+
+What was deliberately NOT done, and why: `git checkout --theirs` on a rebase, or a
+`--force-with-lease` fallback, both resolve the conflict by discarding one side's ledger rows.
+These files are the evidence log - dropping rows to make a push succeed would quietly corrupt
+the only record of what the model predicted and when. A failed push is recoverable; a silently
+truncated ledger is not.
