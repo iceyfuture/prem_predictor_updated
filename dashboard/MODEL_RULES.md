@@ -777,3 +777,30 @@ r = mu/(dispersion - 1). Measured, not assumed - and stable across 26 years (1.5
 
 **`expected()` is untouched**, so Rule 8's validated +7.7% MAE over the naive baseline still
 stands - only the distribution around the mean changed, not the mean.
+
+### 22. Scheduler reliability — 2026-09-12 (one DNS blip was costing a whole day)
+
+Reported symptom: fantasy squads not posting, Kalshi settlements not fetched, data going stale.
+Audit of 14 scheduled runs found 2 not-ok and durations from 0 to 96 minutes.
+
+**Root cause, 2026-09-11 06:35:** `socket.gaierror: nodename nor servname provided`. The Mac was
+waking from sleep and DNS was not up. The first network step died, and because nothing retried,
+the failure took out **four of eight steps** - build_player_stats, fotmob, compute_strength and
+build_dashboard. No fantasy squad, no settlement, no dashboard. With a once-daily schedule,
+nothing recovered for 24 hours.
+
+Four fixes:
+
+1. **Wait for the network.** `net_ready()` polls fotmob / FPL / ESPN on port 443, up to ~5
+   minutes, before the chain starts. A machine waking at 06:30 no longer loses the day.
+2. **Retry each step**, 3 attempts with backoff, re-checking connectivity between tries. Every
+   script here is idempotent - predictions lock once per fixture, the fantasy snapshot seals
+   once per gameweek, stat snapshots de-duplicate on date - so a retry costs nothing and
+   rescues a transient error. Verified with a harness: a step that fails twice then succeeds is
+   reported "recovered on attempt 3"; one that always fails still sets the failure flag.
+3. **Every 3 hours, not daily.** `StartInterval 10800` also fires on wake when a slot was
+   missed, which `StartCalendarInterval` does not do reliably. `RunAtLoad` is now true so a
+   reboot does not leave the desk stale until the next slot. Caches (ESPN 180 min, FotMob 30
+   days for finished matches) keep repeat runs cheap - a fully cached run takes 33 seconds.
+4. **`refresh_status.json`** records per-step ok/failed and a finish timestamp, so a silent
+   failure is visible instead of only surfacing as stale data days later.

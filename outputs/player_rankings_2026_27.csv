@@ -480,7 +480,7 @@ rank,first_name,second_name,w_points,w_goals,w_assists,w_goal_involvements,w_xgi
 479,Antony,dos Santos,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1,Antony,MID,Man Utd,2025-26,0.0,0.0,"recency-weighted FPL points, decay 8**(-age/3)"
 480,Chido,Obi,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1,Obi,FWD,Man United,2025-26,0.0,0.0,"recency-weighted FPL points, decay 8**(-age/3)"
 481,Jacob,Slater,0.0,0.0,0.0,0.0,0.0,0.0,0.0,2,Slater,DEF,Hull,2025-26,0.0,0.0,"recency-weighted FPL points, decay 8**(-age/3)"
-482,Stephen,Mfuni,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1,Mfuni,DEF,Man City,2025-26,0.0,0.0,"recency-weighted FPL points, decay 8**(-age/3)"
+482,Stephen,Mfuni,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1,Mfuni,DEF,Coventry,2025-26,0.0,0.0,"recency-weighted FPL points, decay 8**(-age/3)"
 483,Ibrahim,Osman,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1,I.Osman,MID,Brighton,2024-25,0.0,0.0,"recency-weighted FPL points, decay 8**(-age/3)"
 484,Julian,Eyestone,0.0,0.0,0.0,0.0,0.0,0.0,0.0,2,Eyestone,GKP,Brentford,2025-26,0.0,0.0,"recency-weighted FPL points, decay 8**(-age/3)"
 485,Leo,Shahar,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1,Shahar,DEF,Newcastle,2025-26,0.0,0.0,"recency-weighted FPL points, decay 8**(-age/3)"

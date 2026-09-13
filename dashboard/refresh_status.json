@@ -1,0 +1,14 @@
+{
+  "finished_at": "2026-09-13T02:27:07Z",
+  "ok": true,
+  "steps": {
+    "team_stats.py": "ok",
+    "build_player_stats.py": "ok",
+    "fotmob.py": "ok",
+    "build_dashboard.py": "ok",
+    "build_rankings.py": "ok",
+    "link_squads.py": "ok",
+    "make_standalone.py": "ok",
+    "compute_strength.py": "ok"
+  }
+}
