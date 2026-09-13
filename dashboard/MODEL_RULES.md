@@ -1051,3 +1051,26 @@ the launcher is still visible, so it cannot steal focus during init or focus a h
 **The launcher hides itself when sampling is unavailable.** `window.claude` is an artifact
 runtime capability, so the analyst works in the Claude artifact and not on the GitHub Pages
 copy. A dead button is worse than no button.
+
+## Rule 32 — the public copy links to the artifact rather than hosting a key
+
+`sample` is an **artifact runtime capability**: it exists only inside the Claude artifact,
+where each question runs on the *viewer's* own Claude account. It does not exist on the
+GitHub Pages origin and no retry will make it appear.
+
+Putting the analyst on the public URL would mean a hosted endpoint holding an Anthropic
+key, because GitHub Pages is static and anything in the page is readable by anyone. That
+key would then be spendable by anyone who found the link. Declined deliberately: the
+public copy shows the same launcher, which opens the dock with an explanation and a link
+to the artifact. No endpoint to run, no key in a public page, no bill that scales with
+strangers.
+
+The two dead-end cases are distinguished by `window.claude`:
+
+- **absent** → static copy → `offerArtifactInstead()` (link out)
+- **present but `use('sample')` is null** → we are *in* the artifact and the viewer declined
+  consent → hide the launcher; linking would point at the page already open
+
+Also: `capabilities: {sample: {}}` has to be declared at publish time. Without it
+`claude.use('sample')` resolves `null` and the analyst silently disappears — which is
+exactly what "it won't let me ask anything" looked like.
