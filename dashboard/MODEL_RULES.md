@@ -993,3 +993,61 @@ at this fix did exactly that and doubled the churn.
 This is the actual fix for the CI conflicts. Rule 28's sync-before-build and rebuild-on-race
 remain as the backstop for a genuine simultaneous write, but there is now almost nothing to
 collide over.
+
+## Rule 30 — the analyst must remember what happened, not only what is coming
+
+`analystContext()` built its fixture list from `if(!m.finished ...)`, so the assistant
+was shown **upcoming games only**. Every played result, and every per-match statistic
+FotMob had already been writing since the season started, was filtered out before the
+prompt was assembled. Asked "how did Arsenal play?", it had literally nothing to read.
+
+The data was never missing — it was never plumbed:
+
+| store | rows | written by |
+|---|---|---|
+| `outputs/team_fotmob_2026_27.csv` | 74 team-match rows, 43 columns | `fotmob.py`, every refresh |
+| `outputs/team_match_2026_27.csv` | 74 | the match collector |
+| `outputs/fpl_player_gameweek_2026_27.csv` | 1,177 player-gameweeks | the FPL puller |
+
+`match_log()` in `build_dashboard.py` now folds these into `dashboard.json` as `results`:
+
+- **`matches`** — the two team-rows of each game paired into one record (score, xG, xGOT,
+  shots, shots on target, big chances, possession, touches in the box). A half-written
+  match is skipped rather than have the missing side invented.
+- **`table`** — season to date per club, including **xGA taken from the paired row**, so
+  xGD is real. This is the table the strength index is fit on, which lets the assistant
+  explain *why* a club is rated where it is.
+- **`players`** — the top 12 FPL scorers per gameweek, played minutes only.
+
+Cost: **15 KB** on a 1.6 MB payload. The context the assistant receives went from
+~2.2k to ~3.9k tokens.
+
+It pays for itself immediately: Hull sit 3rd on 8 points with an **xGD of −2.28**, the
+worst in the top half. Before this the assistant could not have said so.
+
+Two guards ship with it. The system prompt now states the assistant can see results and
+must use them, **and** that four gameweeks is far too small a sample to quote a hit rate
+from or turn into a prediction. `match_log()` returns `{}` when the FotMob store is
+absent, so a fresh clone still builds.
+
+## Rule 31 — the analyst is a floating dock, and its UI is wired before the sampling gate
+
+It used to live inside the fantasy accordion, so it was reachable only when that section
+was open and scrolled to. It is now a fixed launcher (bottom-right) opening a dock, at
+any scroll position, on any tab.
+
+Two bugs were found and fixed while moving it:
+
+1. The old failure path called `panel.closest('.disclosure-item').hidden = true`. Outside
+   the accordion `closest()` returns `null`, so the no-sampling path — the **normal** path
+   on GitHub Pages — threw a `TypeError`.
+2. Open/close listeners were registered *after* `await window.claude.use('sample')`. A slow
+   or absent grant left a launcher that opened nothing, and made the dock untestable
+   without a live grant. The UI is now wired **before** the await; only sending is gated.
+
+`closeDock()` restores focus to the launcher only when it actually closed an open dock and
+the launcher is still visible, so it cannot steal focus during init or focus a hidden node.
+
+**The launcher hides itself when sampling is unavailable.** `window.claude` is an artifact
+runtime capability, so the analyst works in the Claude artifact and not on the GitHub Pages
+copy. A dead button is worse than no button.

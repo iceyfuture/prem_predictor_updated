@@ -230,6 +230,74 @@
   @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
   :focus-visible{outline:2px solid var(--pl-cyan);outline-offset:2px;border-radius:6px}
   @media(max-width:820px){.split{grid-template-columns:1fr}.cards{grid-template-columns:1fr}.srow{grid-template-columns:18px 96px 1fr 44px}}
+
+  /* ---------------- Ask the analyst: floating launcher + dock ---------------- */
+  #chatfab{position:fixed;right:18px;bottom:18px;z-index:60;display:flex;align-items:center;gap:9px;
+    padding:12px 17px;border:0;border-radius:999px;cursor:pointer;font:inherit;font-weight:800;
+    font-size:14px;color:#12001A;background:linear-gradient(135deg,var(--pl-green),var(--pl-cyan));
+    box-shadow:0 8px 26px rgba(0,0,0,.46),0 0 0 1px rgba(255,255,255,.10) inset;
+    transition:transform .16s ease,box-shadow .16s ease}
+  /* an unconstrained svg stretches to the flex line and made the pill 95px tall */
+  #chatfab svg{width:22px;height:22px;flex:0 0 auto;display:block}
+  #chatfab span{flex:0 0 auto;white-space:nowrap;line-height:1}
+  #chatfab:hover{transform:translateY(-2px);box-shadow:0 12px 32px rgba(0,0,0,.54)}
+  #chatfab:active{transform:translateY(0)}
+  #chatfab:focus-visible{outline:2px solid var(--pl-cyan);outline-offset:3px}
+  #chatfab[aria-expanded="true"]{opacity:0;pointer-events:none}
+  #chatfab.unread::after{content:"";position:absolute;top:8px;right:12px;width:9px;height:9px;
+    border-radius:50%;background:var(--pl-pink);box-shadow:0 0 0 2px #12001A}
+
+  #chatdock{position:fixed;right:18px;bottom:18px;z-index:61;width:min(430px,calc(100vw - 36px));
+    max-height:min(660px,calc(100vh - 36px));display:flex;flex-direction:column;
+    background:var(--panel);border:1px solid var(--line-2);border-radius:var(--r);
+    box-shadow:0 22px 60px rgba(0,0,0,.62);overflow:hidden;
+    animation:dockin .18s cubic-bezier(.2,.8,.3,1)}
+  @keyframes dockin{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion:reduce){#chatdock{animation:none}#chatfab{transition:none}}
+  #chatdock header{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:12px 14px;border-bottom:1px solid var(--line);background:var(--panel-2);flex:0 0 auto}
+  #chatdock header b{display:block;font-size:14px;letter-spacing:-.01em}
+  #chatdock header small{display:block;color:var(--muted);font-size:11.5px;margin-top:2px}
+  #chatclose{background:none;border:0;color:var(--muted);font-size:24px;line-height:1;cursor:pointer;
+    padding:2px 7px;border-radius:8px}
+  #chatclose:hover{color:var(--ink);background:rgba(255,255,255,.07)}
+  #analyst{display:flex;flex-direction:column;min-height:0;flex:1 1 auto;padding:12px 14px 13px}
+
+  .chatlog{flex:1 1 auto;min-height:132px;overflow-y:auto;display:flex;flex-direction:column;gap:9px;
+    padding-right:3px;scrollbar-width:thin}
+  .chatlog .msg{padding:9px 11px;border-radius:11px;font-size:13.5px;line-height:1.5;
+    white-space:pre-wrap;overflow-wrap:anywhere;max-width:92%}
+  .chatlog .msg.you{align-self:flex-end;background:rgba(4,245,255,.13);
+    border:1px solid rgba(4,245,255,.26)}
+  .chatlog .msg.bot{align-self:flex-start;background:var(--panel-2);border:1px solid var(--line)}
+  .chatlog .msg.err{align-self:stretch;background:rgba(233,0,82,.12);
+    border:1px solid rgba(233,0,82,.32);color:#FFD9E4}
+  .chatlog .who{display:block;font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--faint);margin-bottom:4px;font-weight:700}
+
+  .chatsuggest{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 0;flex:0 0 auto}
+  .chatsuggest button{background:rgba(255,255,255,.05);border:1px solid var(--line-2);
+    color:var(--muted);border-radius:999px;padding:5px 11px;font:inherit;font-size:11.5px;
+    cursor:pointer;transition:all .13s ease}
+  .chatsuggest button:hover{color:var(--ink);border-color:var(--pl-cyan);background:rgba(4,245,255,.09)}
+
+  .chatbar{display:flex;gap:7px;margin-top:10px;flex:0 0 auto}
+  .chatbar input{flex:1 1 auto;min-width:0;background:var(--bg-2);border:1px solid var(--line-2);
+    color:var(--ink);border-radius:10px;padding:10px 12px;font:inherit;font-size:13.5px}
+  .chatbar input:focus{outline:none;border-color:var(--pl-cyan);
+    box-shadow:0 0 0 3px rgba(4,245,255,.14)}
+  .chatbar button{border:0;border-radius:10px;padding:10px 15px;font:inherit;font-weight:800;
+    font-size:13px;cursor:pointer;color:#12001A;
+    background:linear-gradient(135deg,var(--pl-green),var(--pl-cyan))}
+  .chatbar button:disabled{opacity:.42;cursor:default}
+  #chatstop{background:rgba(255,255,255,.09);color:var(--ink)}
+  #chatnote{margin:9px 0 0;font-size:11px;line-height:1.45;flex:0 0 auto}
+
+  @media (max-width:560px){
+    #chatdock{right:8px;left:8px;bottom:8px;width:auto;max-height:calc(100vh - 16px)}
+    #chatfab{right:12px;bottom:12px;padding:11px 15px}
+    #chatfab span{display:none}
+  }
 </style>
 <link rel="stylesheet" href="minimal.css">
 </head>
@@ -322,24 +390,6 @@
           <span><b>Chips</b><small>Bench Boost, Triple Captain, Wildcard, Free Hit</small></span><i aria-hidden="true"></i>
         </button>
         <div class="disclosure-panel" id="fantasy-chips-panel" hidden><div id="chips"></div></div>
-      </section>
-      <section class="disclosure-item">
-        <button type="button" class="disclosure-trigger" aria-expanded="true" aria-controls="analyst-panel">
-          <span><b>Ask the analyst</b><small>Chat with Claude about everything on this desk</small></span><i aria-hidden="true"></i>
-        </button>
-        <div class="disclosure-panel" id="analyst-panel">
-          <div id="analyst">
-            <div id="chatlog" class="chatlog"></div>
-            <div class="chatsuggest" id="chatsuggest"></div>
-            <div class="chatbar">
-              <input id="chatin" type="text" autocomplete="off"
-                     placeholder="Ask anything - e.g. summarise this weekend's games">
-              <button id="chatsend" type="button">Ask</button>
-              <button id="chatstop" type="button" hidden>Stop</button>
-            </div>
-            <p class="panel-hint" id="chatnote"></p>
-          </div>
-        </div>
       </section>
       <section class="disclosure-item">
         <button type="button" class="disclosure-trigger" aria-expanded="true" aria-controls="fantasy-you-panel">
@@ -822,6 +872,53 @@ function analystContext(){
     L.push('\nCHIPS: '+D.chips.summary);
     D.chips.chips.forEach(function(c){ L.push('  '+c.chip+': value '+c.value+' vs bar '+c.threshold+' -> '+c.verdict); });
   }
+  // WHAT ACTUALLY HAPPENED. Without this the assistant only ever saw unplayed
+  // fixtures and had to answer "how did they play?" from nothing.
+  var R = D.results||{};
+  if(R.table && R.table.length){
+    L.push('\nSEASON SO FAR - played record through GW'+R.through_gw+
+           ' (xG/xGA are season totals, so xGD is the honest version of the table):');
+    R.table.forEach(function(t,i){
+      L.push('  '+(i+1)+'. '+t.team+'  '+t.p+'P '+t.w+'W '+t.d+'D '+t.l+'L  '+
+             t.gf+':'+t.ga+'  '+t.pts+'pts   xG '+t.xg+'  xGA '+t.xga+'  xGD '+t.xgd+
+             '   '+t.sot+' SoT, '+t.bc+' big chances, '+t.poss+'% avg possession');
+    });
+    L.push('  NOTE: a club well above or below its xGD is the one most likely to move. Say so.');
+  }
+  if(R.matches && R.matches.length){
+    var recent = R.matches.slice(-16);
+    L.push('\nMATCH RESULTS (most recent '+recent.length+', from FotMob per-game stats):');
+    recent.forEach(function(m){
+      L.push('  GW'+m.gw+' '+m.date+'  '+m.home+' '+m.hg+'-'+m.ag+' '+m.away+
+             '   xG '+m.hxg+'-'+m.axg+'   xGOT '+m.hxgot+'-'+m.axgot+
+             '   shots '+m.hsh+'-'+m.ash+' ('+m.hsot+'-'+m.asot+' on target)'+
+             '   big chances '+m.hbc+'-'+m.abc+'   home possession '+m.hposs+'%');
+    });
+  }
+  if(R.players && R.players.length){
+    L.push('\nSTANDOUT PLAYER GAMEWEEKS (top FPL scorers each week, played minutes only):');
+    R.players.slice().sort(function(a,b){ return b.gw-a.gw || b.pts-a.pts; }).slice(0,24)
+      .forEach(function(p){
+        L.push('  GW'+p.gw+' '+p.name+' ('+p.team+', '+p.pos+')  '+p.pts+' pts  '+
+               p.g+'G '+p.a+'A  '+p.min+' mins  '+p.bonus+' bonus  xGI '+p.xgi);
+      });
+  }
+  // how the model's own calls on those played games turned out
+  var done = [];
+  (D.weeks||[]).forEach(function(w){ (w.matches||[]).forEach(function(m){
+    if(m.finished && m.score) done.push({w:w.gw, m:m}); }); });
+  if(done.length){
+    L.push('\nHOW THE MODEL CALLED THE PLAYED GAMES (its pre-kickoff %, then the result):');
+    done.slice(-16).forEach(function(o){ var m=o.m;
+      var pick = (m.ph>=m.pd && m.ph>=m.pa) ? 'home' : (m.pa>=m.pd ? 'away' : 'draw');
+      var top  = Math.max(m.ph, m.pd, m.pa);
+      L.push('  GW'+o.w+' '+m.home+' v '+m.away+'  model '+m.ph+'/'+m.pd+'/'+m.pa+
+             ' (leaned '+pick+' at '+top+'%)  ->  '+m.score+
+             (m.result?('  ['+m.result+']'):'')+'  model xG '+(m.xg||'?'));
+    });
+    L.push('  Four gameweeks is far too few to judge accuracy from. Do not claim a hit rate.');
+  }
+
   // the track record, stated plainly
   var st = D.settled||{}, sp = D.settled_props||{};
   L.push('\nTRACK RECORD SO FAR THIS SEASON:');
@@ -837,7 +934,10 @@ function analystContext(){
 '  * Promoted clubs (marked provisional) have almost no data; treat their numbers as weak.\n'+
 '  * Where the model is genuinely useful: FPL selection (no market to beat) and team corners\n'+
 '    (+7.7% MAE over a naive baseline, validated on 9,170 matches).\n'+
-'  * "Form" and "quality" are different. High form on low quality is the regression trap.');
+'  * "Form" and "quality" are different. High form on low quality is the regression trap.\n'+
+'  * You CAN see played results, per-match xG/shots/possession and player gameweek scores.\n'+
+'    Use them. But four gameweeks is a tiny sample: describe what happened, and flag\n'+
+'    over/under-performance vs xG, without turning either into a prediction or a bet.');
   return L.join('\n');
 }
 
@@ -890,26 +990,53 @@ async function askAnalyst(q){
   }
 }
 
+function openDock(){
+  var d = $('chatdock'), f = $('chatfab');
+  d.hidden = false; f.setAttribute('aria-expanded','true'); f.classList.remove('unread');
+  var i = $('chatin'); if(i) i.focus();
+}
+function closeDock(){
+  var d = $('chatdock'), f = $('chatfab');
+  var wasOpen = !d.hidden;
+  d.hidden = true; f.setAttribute('aria-expanded','false');
+  // only pull focus back if we actually closed something the user had open, and only to a
+  // launcher that is still on screen - otherwise this steals focus during init
+  if(wasOpen && !f.hidden) f.focus();
+}
+
 async function initAnalyst(){
-  var panel = document.getElementById('analyst');
-  if(!panel) return;
+  var panel = document.getElementById('analyst'), fab = $('chatfab'), dock = $('chatdock');
+  if(!panel || !fab || !dock) return;
   var note = $('chatnote');
+
+  // Wire open/close FIRST and unconditionally. Doing it after the await left every
+  // listener behind the sampling check, so a slow or absent grant produced a launcher
+  // that opened nothing - and made the dock impossible to test without a live grant.
+  fab.addEventListener('click', openDock);
+  $('chatclose').addEventListener('click', closeDock);
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape' && !dock.hidden) closeDock();
+  });
+
   note.textContent = 'Connecting...';
   var sample = null;
   try{ sample = window.claude ? await window.claude.use('sample') : null; }catch(e){ sample = null; }
   if(!sample){
-    // GitHub Pages copy, or a viewer that cannot sample - hide rather than offer a dead box
-    panel.closest('.disclosure-item').hidden = true;
+    // No sampling here - the GitHub Pages copy, or a viewer who declined. Take the launcher
+    // away rather than leave a button that opens a box which cannot answer.
+    fab.hidden = true; closeDock(); dock.hidden = true;
     return;
   }
   window.__sample = sample;
+  fab.hidden = false;
   note.textContent = "Answers come from Claude reading this page's data, on your own Claude account. "+
                      'It has no memory between visits and cannot browse.';
-  var qs = ["Summarise this weekend's games",
+  var qs = ["Who is overperforming their xG?",
+            "How did my players do last week?",
+            "Summarise the results so far",
             "Who should I captain?",
             "Is my transfer worth it?",
-            "Which fixtures look closest?",
-            "What is my biggest weakness this season?"];
+            "Which fixtures look closest?"];
   $('chatsuggest').innerHTML = qs.map(function(q){ return '<button type="button">'+esc(q)+'</button>'; }).join('');
   Array.prototype.forEach.call($('chatsuggest').querySelectorAll('button'), function(b){
     b.addEventListener('click', function(){ askAnalyst(b.textContent); });
@@ -1135,5 +1262,38 @@ function boot(d){DATA=d;
 (window.__DASHBOARD__?Promise.resolve(window.__DASHBOARD__):fetch('dashboard.json').then(r=>{if(!r.ok)throw 0;return r.json()}))
  .then(boot).catch(()=>{$('cards').innerHTML='<div style="padding:40px;text-align:center;color:var(--muted)">dashboard.json not found &mdash; run build_dashboard.py, then serve with python3 -m http.server.</div>'});
 </script>
+
+<!-- Ask the analyst: floating launcher + dock. Lives outside the accordion so it is
+     reachable from any scroll position instead of only when that section is open. -->
+<button id="chatfab" type="button" aria-expanded="false" aria-controls="chatdock"
+        title="Ask the analyst" hidden>
+  <svg viewBox="0 0 24 24" aria-hidden="true" width="22" height="22">
+    <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.9 9.9 0 0 1-2.8-.4L4 21l1.4-4a8.2 8.2 0 0 1-1.4-4.5
+             8.4 8.4 0 0 1 9-8.4 8.4 8.4 0 0 1 8 7.4z" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linejoin="round"/>
+  </svg>
+  <span>Ask the analyst</span>
+</button>
+
+<div id="chatdock" hidden role="dialog" aria-modal="false" aria-labelledby="chatdock-title">
+  <header>
+    <div>
+      <b id="chatdock-title">Ask the analyst</b>
+      <small>Reads this desk - fixtures, results, your team</small>
+    </div>
+    <button id="chatclose" type="button" aria-label="Close the analyst">&#215;</button>
+  </header>
+  <div id="analyst">
+    <div id="chatlog" class="chatlog"></div>
+    <div class="chatsuggest" id="chatsuggest"></div>
+    <div class="chatbar">
+      <input id="chatin" type="text" autocomplete="off"
+             placeholder="Ask anything - e.g. how did Arsenal actually play?">
+      <button id="chatsend" type="button">Ask</button>
+      <button id="chatstop" type="button" hidden>Stop</button>
+    </div>
+    <p class="panel-hint" id="chatnote"></p>
+  </div>
+</div>
 </body>
 </html>

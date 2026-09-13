@@ -44,6 +44,124 @@ def read_csv(p):
         return list(csv.DictReader(f))
 
 
+# ---------------------------------------------------------------------------
+# RULE 30: the analyst has to remember what happened, not just what is coming.
+# Everything below is already on disk - fotmob.py writes the per-match team stats
+# every refresh, and the FPL puller writes per-player gameweek scores - but none of
+# it ever reached dashboard.json, so the chat context was built from upcoming
+# fixtures only and the assistant could not answer "how did Arsenal play?" at all.
+# This folds the played record in, aggregated hard enough to stay a small payload.
+# ---------------------------------------------------------------------------
+def _num(v, d=None):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return d
+    return round(f, 2)
+
+
+def _int(v, d=0):
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return d
+
+
+def match_log():
+    """Pair the two team-rows of each played match into one record, aggregate the
+    season to date per club, and pull the standout player gameweeks. Returns {} when
+    the FotMob store is missing so a fresh clone still builds."""
+    path = os.path.join(ROOT, "outputs", "team_fotmob_2026_27.csv")
+    if not os.path.exists(path):
+        return {}
+    rows = read_csv(path)
+    if not rows:
+        return {}
+
+    # fotmob writes one row per team per match; the home row carries the fixture identity
+    by_match = {}
+    for r in rows:
+        key = (r.get("date", ""), tuple(sorted([r.get("team", ""), r.get("opponent", "")])))
+        by_match.setdefault(key, []).append(r)
+
+    matches = []
+    for key, pair in sorted(by_match.items()):
+        home = next((r for r in pair if r.get("venue") == "H"), None)
+        away = next((r for r in pair if r.get("venue") == "A"), None)
+        if not home or not away:
+            continue  # a half-written match; skip rather than invent the other side
+        matches.append({
+            "gw": _int(home.get("gw")), "date": home.get("date", ""),
+            "home": home.get("team", ""), "away": away.get("team", ""),
+            "hg": _int(home.get("gf")), "ag": _int(away.get("gf")),
+            "hxg": _num(home.get("xg")), "axg": _num(away.get("xg")),
+            "hxgot": _num(home.get("xgot")), "axgot": _num(away.get("xgot")),
+            "hsot": _int(home.get("shots_on_target")), "asot": _int(away.get("shots_on_target")),
+            "hsh": _int(home.get("shots")), "ash": _int(away.get("shots")),
+            "hbc": _int(home.get("big_chances")), "abc": _int(away.get("big_chances")),
+            "hposs": _num(home.get("possession")),
+            "hbox": _int(home.get("touches_opp_box")), "abox": _int(away.get("touches_opp_box")),
+        })
+    matches.sort(key=lambda m: (m["gw"], m["date"]))
+
+    # season to date per club, from the same rows - this is the table the strength
+    # index is fit on, so the analyst can see WHY a club is rated where it is
+    agg = {}
+    for r in rows:
+        t = agg.setdefault(r.get("team", ""), {
+            "team": r.get("team", ""), "p": 0, "w": 0, "d": 0, "l": 0, "gf": 0, "ga": 0,
+            "xg": 0.0, "xga": 0.0, "sot": 0, "sh": 0, "bc": 0, "poss": 0.0})
+        t["p"] += 1
+        res = (r.get("result") or "").upper()
+        t["w" if res == "W" else "l" if res == "L" else "d"] += 1
+        t["gf"] += _int(r.get("gf")); t["ga"] += _int(r.get("ga"))
+        t["xg"] += _num(r.get("xg"), 0.0) or 0.0
+        t["sot"] += _int(r.get("shots_on_target")); t["sh"] += _int(r.get("shots"))
+        t["bc"] += _int(r.get("big_chances")); t["poss"] += _num(r.get("possession"), 0.0) or 0.0
+    # xG conceded is the opponent's xG, so it has to come from the paired row
+    for m in matches:
+        if m["home"] in agg and m["axg"] is not None:
+            agg[m["home"]]["xga"] += m["axg"]
+        if m["away"] in agg and m["hxg"] is not None:
+            agg[m["away"]]["xga"] += m["hxg"]
+    table = []
+    for t in agg.values():
+        p = max(t["p"], 1)
+        t["pts"] = t["w"] * 3 + t["d"]
+        t["xgd"] = round(t["xg"] - t["xga"], 2)
+        for k in ("xg", "xga", "poss"):
+            t[k] = round(t[k] / p, 2) if k == "poss" else round(t[k], 2)
+        table.append(t)
+    table.sort(key=lambda t: (-t["pts"], -(t["gf"] - t["ga"]), -t["gf"]))
+
+    # standout player gameweeks - top scorers by FPL points, which is the metric the
+    # user actually cares about. Capped per gameweek to keep the payload small.
+    players = []
+    gwp = os.path.join(ROOT, "outputs", "fpl_player_gameweek_2026_27.csv")
+    namep = os.path.join(ROOT, "outputs", "fpl_player_stats_2026_27.csv")
+    if os.path.exists(gwp) and os.path.exists(namep):
+        meta = {r["id"]: r for r in read_csv(namep)}
+        buckets = {}
+        for r in read_csv(gwp):
+            if _int(r.get("minutes")) <= 0:
+                continue
+            buckets.setdefault(_int(r.get("gw")), []).append(r)
+        for gw in sorted(buckets):
+            top = sorted(buckets[gw], key=lambda r: -_int(r.get("total_points")))[:12]
+            for r in top:
+                m = meta.get(r.get("id"), {})
+                players.append({
+                    "gw": gw, "name": m.get("name", "?"), "team": m.get("team", "?"),
+                    "pos": m.get("pos", "?"), "pts": _int(r.get("total_points")),
+                    "min": _int(r.get("minutes")), "g": _int(r.get("goals_scored")),
+                    "a": _int(r.get("assists")), "bonus": _int(r.get("bonus")),
+                    "xgi": _num(r.get("expected_goal_involvements")),
+                })
+
+    return {"matches": matches, "table": table, "players": players,
+            "through_gw": max((m["gw"] for m in matches), default=0)}
+
+
 # Cold-start prior for newly-promoted clubs, calibrated on 95 promoted sides (1994-2026):
 # their first 5 games average GF 1.01 / GA 1.56 per game and they lose 49% of them. The old
 # "bottom-3 of last season" prior was far too generous (bottom-3 are relegation-quality but
@@ -1061,6 +1179,12 @@ def build():
 
     # RULE 5: record every prediction (with the closing line) BEFORE kickoff, then grade it
     # against the result + closing odds once the game is played. This is the live evidence log.
+    data["results"] = match_log()
+    if data["results"].get("matches"):
+        r = data["results"]
+        print(f"  played record: {len(r['matches'])} matches through GW{r['through_gw']}, "
+              f"{len(r['players'])} standout player gameweeks")
+
     data["settled"] = record_ledger(weeks, now.isoformat(timespec="minutes"))
     data["settled_props"] = record_props_ledger(weeks, now.isoformat(timespec="minutes"))
     with open(OUT, "w") as f:
