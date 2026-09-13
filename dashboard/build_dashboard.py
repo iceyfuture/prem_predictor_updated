@@ -539,7 +539,7 @@ def record_ledger(weeks, built_at):
 
 
 def build():
-    print("fetching ESPN fixtures + odds ...")
+    print("fetching fixtures (FotMob, ESPN fallback) ...")
     events = feeds.espn_events()
     weeks_raw = feeds.to_matchweeks(events)
     print(f"  {len(events)} fixtures over {len(weeks_raw)} matchweeks")

@@ -121,7 +121,7 @@ def parse_odds(comp):
 
 
 # --------------------------------------------------------------------- ESPN
-def espn_events(start="20260801", end="20270601", chunk_days=45):
+def _espn_events_raw(start="20260801", end="20270601", chunk_days=45):
     """All PL events in the window, fetched in chunks (ESPN caps a single range)."""
     s = datetime.strptime(start, "%Y%m%d")
     e = datetime.strptime(end, "%Y%m%d")
@@ -306,3 +306,28 @@ def _get_url(url, cache_key, max_age_min):
     data = json.load(urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=45))
     json.dump(data, open(p, "w"))
     return data
+
+
+def espn_events(*a, **kw):
+    """Fixtures for the season. FOTMOB FIRST, ESPN as the fallback.
+
+    ESPN 403s browser User-Agents and refused every request from the GitHub Actions runner on
+    the first CI run, leaving the build with 0 fixtures - which then had refresh_clubs conclude
+    that 164 players had changed club. FotMob answered normally from that same runner.
+
+    The two were cross-checked on this season's 37 finished matches: identical scores on all
+    37, and identical `utc` formatting, so this is a like-for-like swap rather than a
+    downgrade. FotMob also carries `round` directly instead of having matchweeks inferred.
+
+    Either source can fail, so try both before giving up; the caller's empty-feed guard
+    handles the case where neither answers.
+    """
+    try:
+        import fotmob
+        ev = fotmob.events()
+        if ev:
+            return ev
+        print("  ! FotMob returned 0 fixtures - falling back to ESPN")
+    except Exception as e:
+        print(f"  ! FotMob fixtures unavailable ({e}) - falling back to ESPN")
+    return _espn_events_raw(*a, **kw)

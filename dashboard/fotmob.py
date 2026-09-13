@@ -301,3 +301,56 @@ if __name__ == "__main__":
         print(f"  {r['rank']:>2}  {r['team']:<16}{r['net']:>+7.2f}{r['attack']:>+7.2f}{r['defense']:>+7.2f}"
               f"{r['xg_pg']:>6.2f}{r['xga_pg']:>6.2f}{r['xgd_pg']:>+7.2f}{r['xgot_pg']:>6.2f}"
               f"{r['big_ch_pg']:>7.2f}{r['shots_in_box_pg']:>7.1f}{r['pts']:>5}{r['gf_minus_xg']:>+7.2f}")
+
+
+# ------------------------------------------------------- fixtures in the ESPN shape
+# ESPN 403s browser User-Agents and, on the first GitHub Actions run, refused every request
+# while FotMob answered normally from the same runner. FotMob is therefore the more reliable
+# fixture source in CI, and it carries `round` explicitly rather than needing matchweeks
+# derived from dates. Colours, abbreviations and venues are not in its fixture list, so they
+# come from team_meta.json - 20 stable rows captured from ESPN, not re-fetched per build.
+META = os.path.join(HERE, "team_meta.json")
+
+
+def _meta():
+    try:
+        return json.load(open(META))
+    except Exception:
+        return {}
+
+
+def events(max_age_min=180):
+    """Fixtures shaped exactly like feeds.espn_events(), so it is a drop-in source."""
+    m = _meta()
+    out = []
+    for f in fixtures(max_age_min):
+        st = f.get("status") or {}
+        h = ALIAS.get((f.get("home") or {}).get("name"), (f.get("home") or {}).get("name"))
+        a = ALIAS.get((f.get("away") or {}).get("name"), (f.get("away") or {}).get("name"))
+        if not h or not a:
+            continue
+        hs = as_ = None
+        sc = str(st.get("scoreStr") or "")
+        if "-" in sc:
+            try:
+                hs, as_ = [int(x.strip()) for x in sc.split("-", 1)]
+            except ValueError:
+                hs = as_ = None
+        fin = bool(st.get("finished"))
+        hm, am = m.get(h, {}), m.get(a, {})
+        out.append({
+            # ESPN emits "2026-08-21T19:00Z"; FotMob emits "...T19:00:00Z". Match ESPN exactly -
+            # every downstream consumer parses this string.
+            "id": str(f.get("id")),
+            "utc": ((st.get("utcTime") or "")[:16] + "Z") if st.get("utcTime") else None,
+            "home": h, "away": a,
+            "home_abbr": hm.get("abbr", h[:3].upper()), "away_abbr": am.get("abbr", a[:3].upper()),
+            "home_color": hm.get("color", "#5B7A72"), "away_color": am.get("color", "#5B7A72"),
+            "venue": hm.get("venue", ""),
+            "status": "STATUS_FULL_TIME" if fin else ("STATUS_IN_PROGRESS"
+                      if st.get("started") and not fin else "STATUS_SCHEDULED"),
+            "finished": fin, "live": bool(st.get("started") and not fin),
+            "hs": hs, "as": as_, "odds": None, "gw": int(f["round"]) if f.get("round") else None,
+        })
+    out.sort(key=lambda e: e["utc"] or "")
+    return out

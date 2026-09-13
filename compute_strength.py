@@ -79,6 +79,14 @@ def build_team_index():
                      "proj_gd": round(gf - ga, 1),
                      "form_last6": int(form.get(t, 0)),
                      "provisional": t in cold})
+    # An empty club list means the fixture feed failed upstream, not that the league has no
+    # teams. Writing a strength index from nothing would overwrite a good CSV with an empty
+    # one, and the committed file is what the dashboard and the repo history read. Abort
+    # rather than degrade - same reasoning as the empty-feed guard in build_dashboard.
+    if not rows:
+        raise SystemExit(
+            "ABORT: no clubs resolved for the strength index. The fixture feed is empty - "
+            "refusing to overwrite team_strength_index.csv with nothing.")
     rows.sort(key=lambda r: -r["proj_points"])
     top = rows[0]["proj_points"]
     for k, r in enumerate(rows, 1):

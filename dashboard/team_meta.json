@@ -1,0 +1,102 @@
+{
+ "Arsenal": {
+  "abbr": "ARS",
+  "color": "#e20520",
+  "venue": "Emirates Stadium"
+ },
+ "Aston Villa": {
+  "abbr": "AVL",
+  "color": "#660e36",
+  "venue": "Villa Park"
+ },
+ "Bournemouth": {
+  "abbr": "BOU",
+  "color": "#f42727",
+  "venue": "Vitality Stadium"
+ },
+ "Brentford": {
+  "abbr": "BRE",
+  "color": "#f42727",
+  "venue": "Gtech Community Stadium"
+ },
+ "Brighton": {
+  "abbr": "BHA",
+  "color": "#0606fa",
+  "venue": "American Express Stadium"
+ },
+ "Chelsea": {
+  "abbr": "CHE",
+  "color": "#144992",
+  "venue": "Stamford Bridge"
+ },
+ "Coventry": {
+  "abbr": "COV",
+  "color": "#87cced",
+  "venue": "Coventry Building Society Arena"
+ },
+ "Crystal Palace": {
+  "abbr": "CRY",
+  "color": "#0202fb",
+  "venue": "Selhurst Park"
+ },
+ "Everton": {
+  "abbr": "EVE",
+  "color": "#0606fa",
+  "venue": "Hill Dickinson Stadium"
+ },
+ "Fulham": {
+  "abbr": "FUL",
+  "color": "#ffffff",
+  "venue": "Craven Cottage"
+ },
+ "Hull": {
+  "abbr": "HUL",
+  "color": "#f28800",
+  "venue": "The MKM Stadium"
+ },
+ "Ipswich": {
+  "abbr": "IPS",
+  "color": "#0000fa",
+  "venue": "Portman Road"
+ },
+ "Leeds": {
+  "abbr": "LEE",
+  "color": "#ffffff",
+  "venue": "Elland Road"
+ },
+ "Liverpool": {
+  "abbr": "LIV",
+  "color": "#d11317",
+  "venue": "Anfield"
+ },
+ "Man City": {
+  "abbr": "MNC",
+  "color": "#99c5ea",
+  "venue": "Etihad Stadium"
+ },
+ "Man United": {
+  "abbr": "MAN",
+  "color": "#da020e",
+  "venue": "Old Trafford"
+ },
+ "Newcastle": {
+  "abbr": "NEW",
+  "color": "#000000",
+  "venue": "St. James' Park"
+ },
+ "Nott'm Forest": {
+  "abbr": "NFO",
+  "color": "#c8102e",
+  "venue": "The City Ground"
+ },
+ "Sunderland": {
+  "abbr": "SUN",
+  "color": "#EB172B",
+  "venue": "Stadium of Light"
+ },
+ "Tottenham": {
+  "abbr": "TOT",
+  "color": "#ffffff",
+  "venue": "Tottenham Hotspur Stadium"
+ }
+}

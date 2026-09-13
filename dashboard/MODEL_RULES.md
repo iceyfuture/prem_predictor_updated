@@ -866,3 +866,26 @@ Two guards added, because the failure mode was worse than a crash:
 Also set `PYTHONIOENCODING=utf-8` / `LC_ALL=C.UTF-8` on the Actions job. The runner's default
 locale is ASCII and the transfer verdict contains a right-arrow, which raises UnicodeEncodeError
 mid-print. That was not the cause of run #1, but it would have been the cause of run #2.
+
+### 25. Fixtures come from FotMob now, ESPN is the fallback — 2026-09-13
+
+Rule 24 fixed the ESPN User-Agent, but ESPN remains the weaker source: it refused **every**
+request from the GitHub Actions runner while FotMob answered normally from the same machine.
+A feed that works locally and not in CI is not a feed you can schedule on.
+
+`feeds.espn_events()` now tries FotMob first and falls back to ESPN. Every existing caller
+(`build_dashboard`, `compute_strength`, `simulate_fpl`, `team_stats`, `fpl_chips`) picks this up
+unchanged, because FotMob is shaped into the exact ESPN payload.
+
+Cross-checked before switching, not after:
+
+    380 fixtures from each source
+    all ESPN keys present in the FotMob payload
+    37 of 37 finished matches agree on the score
+    `utc` string identical in format ("2026-08-21T19:00Z")
+
+FotMob also carries `round` explicitly, so matchweeks no longer have to be inferred from dates.
+
+What FotMob's fixture list does NOT carry: venue, club colour, abbreviation. Those are 20 stable
+rows, captured once from ESPN into `dashboard/team_meta.json` rather than re-fetched per build.
+ESPN's `odds` field was already null, so nothing was lost there.
