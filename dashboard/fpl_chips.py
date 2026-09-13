@@ -15,10 +15,19 @@ on vibes: every number below comes from simulate_fpl.project_gw() for the gamewe
   FREE HIT       one-week unlimited transfers; same gap but it reverts next week, so it only
                  pays in a genuinely unusual week (blanks, doubles, injury pile-ups).
 
+"The squad you already hold" is the squad you ACTUALLY hold, read from the FPL API - the same
+source of truth the transfer planner uses (Rule 12). The caller normally resolves it and passes
+it in. The model's own fpl_forward.csv snapshot is only a fallback for when no entry id is
+configured: it records what the model once RECOMMENDED, which stops matching what you own the
+moment you make a transfer it did not suggest, and a wildcard valued against the wrong 15 is
+wrong by whatever those players are worth. Every verdict names the source it used.
+
 A chip is only recommended when its value clears the threshold AND the inputs are trustworthy
 (no stale FPL feed, enough players with real projections).
 """
-import os, sys, csv
+import os, sys
+
+import fpl_transfers
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -28,19 +37,33 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 THRESHOLD = {"bench_boost": 16.0, "triple_captain": 9.0, "wildcard": 18.0, "free_hit": 18.0}
 
 
-def _held_squad(gw):
-    """The squad the model locked LAST gameweek - what you would still be holding."""
-    p = os.path.join(HERE, "fpl_forward.csv")
-    if not os.path.exists(p):
-        return None
-    prev = [r for r in csv.DictReader(open(p)) if int(r["gw"]) == gw - 1]
-    return {int(r["element"]) for r in prev} or None
+def held_squad(gw):
+    """The ids of the squad you actually hold, and a label for where they came from.
+
+    Resolved exactly as fpl_transfers.plan's caller does: the FPL API first, the model's own
+    snapshot only when no entry id is configured. Returns (ids, source); ids is None if neither
+    source resolves.
+    """
+    real = fpl_transfers.real_squad(gw)
+    if real and real.get("ids"):
+        return list(real["ids"]), f"FPL entry {real['entry']} (picks as of GW{real['src_gw']})"
+    return fpl_transfers.held_squad(gw), "model snapshot (no FPL entry id configured)"
 
 
-def advise(gw, team, rows):
-    """team = build_team() output for `gw`; rows = project_gw() output for `gw`."""
+def advise(gw, team, rows, held=None, held_source=None):
+    """team = build_team() output for `gw`; rows = project_gw() output for `gw`.
+
+    `held` = ids of the squad you hold, `held_source` = where the caller got them. The dashboard
+    resolves both before calling (the transfer planner needs them anyway) and passes them down,
+    so the chip advisor and the planner can never disagree about what you own. We resolve them
+    ourselves only when the caller supplied neither - a caller that resolved and came up empty
+    passes held=None WITH a source, and is not second-guessed.
+    """
     if not team:
         return None
+    if held is None and held_source is None:
+        held, held_source = held_squad(gw)
+    held = set(held) if held else None
     squad = team["squad"]
     xi = [s for s in squad if s.get("start")]
     bench = [s for s in squad if not s.get("start")]
@@ -50,10 +73,8 @@ def advise(gw, team, rows):
     tc_val = round(cap["proj"], 1) if cap else 0.0
 
     # Wildcard / Free Hit: how much better is this week's optimal squad than what you hold?
-    held = _held_squad(gw)
     by_id = {r["id"]: r for r in rows if r.get("id") is not None}
     if held:
-        held_proj = sum(by_id[i]["proj"] for i in held if i in by_id)
         # only the best 11 of each actually score, so compare like with like
         held_best = sorted((by_id[i]["proj"] for i in held if i in by_id), reverse=True)[:11]
         new_best = sorted((s["proj"] for s in xi), reverse=True)[:11]
@@ -83,9 +104,10 @@ def advise(gw, team, rows):
                  if cap else "no captain")},
         {"chip": "Wildcard", "value": wc_val, "threshold": THRESHOLD["wildcard"],
          "verdict": rec(wc_val, "wildcard"),
-         "why": (f"optimal XI projects {gap} pts more than the squad you hold; a free transfer "
-                 f"already buys ~{single}, so the wildcard is worth ~{wc_val}"
-                 if wc_val is not None else "no previous squad on record yet - available from MW2")},
+         "why": (f"optimal XI projects {gap} pts more than the 15 you hold, per {held_source}; "
+                 f"a free transfer already buys ~{single}, so the wildcard is worth ~{wc_val}"
+                 if wc_val is not None else
+                 f"no held squad to compare against ({held_source}) - available from MW2")},
         {"chip": "Free Hit", "value": wc_val, "threshold": THRESHOLD["free_hit"],
          "verdict": ("hold" if wc_val is None or wc_val < THRESHOLD["free_hit"] else rec(wc_val, "free_hit")),
          "why": ("same one-week gap as the wildcard, but it reverts next week - only worth it in a "
@@ -94,6 +116,7 @@ def advise(gw, team, rows):
     ]
     play = [c["chip"] for c in chips if c["verdict"] == "PLAY"]
     return {"gw": gw, "chips": chips, "play": play,
+            "held_source": held_source, "held_n": len(held) if held else 0,
             "summary": (f"Play {' + '.join(play)} this matchweek." if play
                         else "Hold all four chips - nothing this week clears the bar.")}
 
@@ -119,6 +142,7 @@ if __name__ == "__main__":
     for c in a["chips"]:
         v = f"{c['value']}" if c["value"] is not None else "-"
         print(f"  {c['chip']:<16}{v:>7}{c['threshold']:>7}  {c['verdict']}")
-    print(f"\n  {a['summary']}\n")
+    print(f"\n  {a['summary']}")
+    print(f"  held squad: {a['held_n']} players from {a['held_source']}\n")
     for c in a["chips"]:
         print(f"  - {c['chip']}: {c['why']}")

@@ -804,3 +804,28 @@ Four fixes:
    days for finished matches) keep repeat runs cheap - a fully cached run takes 33 seconds.
 4. **`refresh_status.json`** records per-step ok/failed and a finish timestamp, so a silent
    failure is visible instead of only surfacing as stale data days later.
+
+### 23. Chip advice was valued against a squad you do not own — 2026-09-12
+
+Found by tracing a stray worktree (`.claude/worktrees/gracious-leakey-bd3091`) that a prior
+session left behind with uncommitted work in it. The fix was written on 2026-09-01 and never
+merged, so the bug had been live for eleven days.
+
+`fpl_chips._held_squad()` read `fpl_forward.csv` - the squad the model once **recommended** -
+and called it "the squad you hold". Rule 12 already established that this is not the same thing:
+the moment you make a transfer the model did not suggest, the two diverge. Checked live at GW4,
+they differed by two players - it believed Mbeumo was owned when the actual squad had Gakpo.
+
+That is not cosmetic for chips. Wildcard and Free Hit are valued as
+`optimal XI - the XI you already hold`, so valuing them against the wrong 15 is wrong by
+whatever those players are worth.
+
+`held_squad()` now resolves the same way `fpl_transfers.plan`'s caller does - FPL API first,
+the model snapshot only when no entry id is configured - and `build_dashboard` passes the
+already-resolved squad straight through rather than re-deriving it. Every verdict now names the
+source it used, so a fallback to the snapshot is visible instead of silent:
+
+    chips: Hold all four chips | held squad: 15 from FPL entry 1102866 (picks as of GW4)
+
+The MODEL_RULES entry from that worktree could not be applied (the file has moved on
+substantially since) so it is rewritten here; the code changes applied cleanly.

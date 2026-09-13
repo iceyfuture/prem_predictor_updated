@@ -933,9 +933,13 @@ def build():
     print(f"  active GW={active_gw} (last finished {last_finished}); "
           f"reveal {reveal_at.date()}; locked={locked}")
 
+    # The chip advisor values the wildcard against the squad you hold, so it must be handed the
+    # SAME held squad the transfer planner used (Rule 12) - re-deriving it from the model's own
+    # snapshot valued the chip against a squad the user does not own.
+    chips = fpl_chips.advise(active_gw, active_team, active_rows, held=held, held_source=src)
+    if chips:
+        print(f"  chips: {chips['summary']} | held squad: {chips['held_n']} from {chips['held_source']}")
     # forward-test: snapshot the active team's projections, grade past weeks vs actual FPL points
-    chips = fpl_chips.advise(active_gw, active_team, active_rows)
-    if chips: print(f"  chips: {chips[chr(39)+chr(115)+chr(117)+chr(109)+chr(109)+chr(97)+chr(114)+chr(121)+chr(39)]}" if False else f"  chips: {chips['summary']}")
     forward = forward_test(active_gw, active_team, weeks_raw, events, now_dt.isoformat(timespec="minutes"))
 
     # strength index over THIS SEASON'S clubs (relegated sides gone, promoted sides in)
