@@ -24,6 +24,7 @@ permissions:
   contents: write        # to commit the updated ledgers and outputs back
   pages: write           # to publish the dashboard
   id-token: write
+  actions: write         # to clear a stale Pages artifact left by a previous attempt
 
 jobs:
   refresh:
@@ -131,6 +132,21 @@ jobs:
         run: |
           mkdir -p _site
           cp dashboard/standalone.html _site/index.html
+      # Re-running a failed JOB keeps the previous attempt's artifact, so deploy-pages then
+      # finds two named "github-pages" and refuses with "Artifact count is 2". Clear the old
+      # one first so a re-run behaves like a fresh run. Only runs on attempt 2+.
+      - name: Clear a stale Pages artifact from an earlier attempt
+        if: ${{ github.run_attempt != '1' }}
+        run: |
+          ids=$(curl -sS -H "Authorization: Bearer ${{ github.token }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            | python3 -c "import json,sys; print(' '.join(str(a['id']) for a in json.load(sys.stdin).get('artifacts',[]) if a['name']=='github-pages'))")
+          for id in $ids; do
+            echo "removing stale github-pages artifact $id"
+            curl -sS -X DELETE -H "Authorization: Bearer ${{ github.token }}" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$id" || true
+          done
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
