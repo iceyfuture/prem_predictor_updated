@@ -903,13 +903,13 @@ async function initAnalyst(){
     return;
   }
   window.__sample = sample;
-  note.textContent = 'Answers come from Claude reading this page's data, on your own Claude account. '+
+  note.textContent = "Answers come from Claude reading this page's data, on your own Claude account. "+
                      'It has no memory between visits and cannot browse.';
-  var qs = ['Summarise this weekend's games',
-            'Who should I captain?',
-            'Is my transfer worth it?',
-            'Which fixtures look closest?',
-            'What is my biggest weakness this season?'];
+  var qs = ["Summarise this weekend's games",
+            "Who should I captain?",
+            "Is my transfer worth it?",
+            "Which fixtures look closest?",
+            "What is my biggest weakness this season?"];
   $('chatsuggest').innerHTML = qs.map(function(q){ return '<button type="button">'+esc(q)+'</button>'; }).join('');
   Array.prototype.forEach.call($('chatsuggest').querySelectorAll('button'), function(b){
     b.addEventListener('click', function(){ askAnalyst(b.textContent); });
