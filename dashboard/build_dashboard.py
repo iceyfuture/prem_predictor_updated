@@ -1010,6 +1010,23 @@ def build():
     data["meta"]["active_gw"] = active_gw
     data["meta"]["team_locked"] = active_team["locked"]
     data["transfers"] = transfer_plan
+    # YOUR OWN SCORES, beside the model's. The forward test answers "is the model any good";
+    # this answers "how am I doing", which is the question you actually open the page for.
+    you = fpl_transfers.entry_history()
+    data["you"] = you
+    if you:
+        byg = {w["gw"]: w for w in you["weeks"]}
+        for wk in (forward.get("weeks") if isinstance(forward, dict) else []) or []:
+            mine = byg.get(wk.get("gw"))
+            if mine:
+                wk["you"] = mine["points"]
+                wk["you_bench"] = mine["bench"]
+                wk["you_rank"] = mine["rank"]
+                # the comparison that matters: your squad vs the one the model picked
+                if wk.get("actual") is not None:
+                    wk["vs_model"] = round(mine["points"] - wk["actual"], 1)
+        print(f"  your FPL: {you['total']} pts over {len(you['weeks'])} gameweeks "
+              f"(latest rank {you['weeks'][-1]['rank']:,})")
     # FORM vs QUALITY, kept separate on purpose - see fpl_form.py. Conflating them is what
     # makes raw "form" tables recommend the player about to regress. Built earlier, because the
     # transfer bar consumes it; this only renders what is already computed.

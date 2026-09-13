@@ -324,3 +324,33 @@ def decorate(squad, gw, weeks=None, team_meta=None):
     return {"gw": gw, "cost": round(sum(r["price"] for r in squad), 1), "formation": formation,
             "xi_proj": round(sum(x["proj"] for x in xi), 1), "captain": (cap.get("name") or cap.get("nm")),
             "squad": out, "bench_order": [b["nm"] for b in bench]}
+
+
+def entry_history(timeout=20):
+    """Your OWN gameweek scores, straight from the FPL API.
+
+    The forward test grades the squad the MODEL picked. That answers "is the model any good",
+    which is not the same question as "how am I doing" - and the second one is the whole reason
+    you open the page. Both are now carried so they can sit side by side.
+    """
+    eid = entry_id()
+    if not eid:
+        return None
+    try:
+        r = urllib.request.Request(
+            f"https://fantasy.premierleague.com/api/entry/{eid}/history/",
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+        with urllib.request.urlopen(r, timeout=timeout) as f:
+            d = json.load(f)
+    except Exception:
+        return None
+    out, total = [], 0
+    for g in d.get("current", []):
+        total += g.get("points", 0)
+        out.append({"gw": g.get("event"), "points": g.get("points"),
+                    "bench": g.get("points_on_bench"), "rank": g.get("overall_rank"),
+                    "gw_rank": g.get("rank"), "transfers": g.get("event_transfers"),
+                    "hit": g.get("event_transfers_cost"), "running": total,
+                    "value": (g.get("value") or 0) / 10.0, "bank": (g.get("bank") or 0) / 10.0})
+    chips = [{"name": c.get("name"), "gw": c.get("event")} for c in d.get("chips", [])]
+    return {"entry": eid, "weeks": out, "total": total, "chips_used": chips}

@@ -324,6 +324,12 @@
         <div class="disclosure-panel" id="fantasy-chips-panel" hidden><div id="chips"></div></div>
       </section>
       <section class="disclosure-item">
+        <button type="button" class="disclosure-trigger" aria-expanded="true" aria-controls="fantasy-you-panel">
+          <span><b>Your season</b><small>Your real FPL points, gameweek by gameweek</small></span><i aria-hidden="true"></i>
+        </button>
+        <div class="disclosure-panel" id="fantasy-you-panel"><div id="youtbl"></div></div>
+      </section>
+      <section class="disclosure-item">
         <button type="button" class="disclosure-trigger" aria-expanded="false" aria-controls="fantasy-forward-panel">
           <span><b>Forward test</b><small>Projected vs actual FPL points, graded each matchweek</small></span><i aria-hidden="true"></i>
         </button>
@@ -723,6 +729,39 @@ function renderChips(){
       <td>${x.threshold}</td><td>${badge(x.verdict)}</td></tr>`).join('')+
     `</tbody></table>`+c.chips.map(x=>`<p class="panel-hint"><b>${esc(x.chip)}:</b> ${esc(x.why)}</p>`).join('');
 }
+function renderYou(){
+  const y=DATA.you, el=$('youtbl'); if(!el)return;
+  if(!y||!y.weeks||!y.weeks.length){
+    el.innerHTML='<p class="panel-hint">No FPL team connected. Set FPL_ENTRY_ID to see your own scores here.</p>';
+    return;}
+  const w=y.weeks, last=w[w.length-1];
+  const fwd={}; ((DATA.forward&&DATA.forward.weeks)||[]).forEach(x=>fwd[x.gw]=x);
+  const best=w.reduce((a,b)=>b.points>a.points?b:a,w[0]);
+  const benchTot=w.reduce((a,b)=>a+(b.bench||0),0);
+  const rows=w.map(x=>{
+    const m=fwd[x.gw]||{}, mv=(m.actual==null)?null:(x.points-m.actual);
+    const cls=mv==null?'':(mv>0?'pos':(mv<0?'neg':''));
+    return `<tr><td>GW${x.gw}</td><td><b>${x.points}</b></td>
+      <td>${m.actual==null?'\u2014':m.actual}</td>
+      <td class="${cls}">${mv==null?'\u2014':(mv>0?'+':'')+mv}</td>
+      <td>${x.bench}</td><td>${x.transfers}${x.hit?' (\u2212'+x.hit+')':''}</td>
+      <td>${x.rank?x.rank.toLocaleString():'\u2014'}</td></tr>`;}).join('');
+  el.innerHTML=`<div class="bt-tiles" style="margin-bottom:14px">
+      <div class="bt-tile"><div class="lbl">Total points</div><div class="val">${y.total}</div>
+        <div class="sub">${w.length} gameweeks played</div></div>
+      <div class="bt-tile"><div class="lbl">Overall rank</div><div class="val">${last.rank?last.rank.toLocaleString():'\u2014'}</div>
+        <div class="sub">after GW${last.gw}</div></div>
+      <div class="bt-tile"><div class="lbl">Best week</div><div class="val">${best.points}</div>
+        <div class="sub">GW${best.gw}</div></div>
+      <div class="bt-tile"><div class="lbl">Left on bench</div><div class="val">${benchTot}</div>
+        <div class="sub">points not started</div></div>
+    </div>
+    <table class="ktab"><thead><tr><th>GW</th><th>You</th><th>Model squad</th><th>Diff</th>
+      <th>Bench</th><th>Transfers</th><th>Overall rank</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="panel-hint"><b>Model squad</b> is what the squad this desk recommended actually scored that week,
+      so <b>Diff</b> is you against it. A dash means that week is not graded yet.
+      ${y.chips_used&&y.chips_used.length?'Chips used: '+y.chips_used.map(c=>c.name+' (GW'+c.gw+')').join(', '):'No chips used yet.'}</p>`;
+}
 function renderForward(){
   const f=DATA.forward; if(!f||!$('forward'))return;
   const rows=f.weeks||[];
@@ -743,7 +782,7 @@ function renderStrength(){
   // week-by-week: only the active gameweek's picks exist \u2014 no 38-week selector
   const sel=$('pickGw'); if(sel){sel.replaceChildren(el(`<option>MW ${DATA.active_gw}</option>`));sel.disabled=true;}
   $('fplHint').textContent=`Best projected FPL performers for Matchweek ${DATA.active_gw}, from simulating that week's fixtures. Refreshes each matchweek.`;
-  renderPicks(); renderForward(); renderForm();renderTransfers();renderChips();
+  renderPicks(); renderForward(); renderYou();renderForm();renderTransfers();renderChips();
   $('players').replaceChildren(...DATA.players.map(p=>el(`<div class="prow"><div style="display:flex;gap:8px;align-items:center;min-width:0"><span class="pos ${esc(p.pos)}">${esc(p.pos)}</span><div style="min-width:0"><div class="nm">${esc(p.nm)}</div><div class="tm">${esc(p.team)}</div></div></div><div class="rt">${p.rating.toFixed(0)}</div></div>`)));
 }
 function renderPicks(){

@@ -889,3 +889,27 @@ FotMob also carries `round` explicitly, so matchweeks no longer have to be infer
 What FotMob's fixture list does NOT carry: venue, club colour, abbreviation. Those are 20 stable
 rows, captured once from ESPN into `dashboard/team_meta.json` rather than re-fetched per build.
 ESPN's `odds` field was already null, so nothing was lost there.
+
+### 26. Your own FPL score is on the page — 2026-09-13
+
+The desk graded the squad the MODEL picked and never showed the user's own score. Those answer
+different questions: the forward test answers "is the model any good", and the page is opened to
+answer "how am I doing". Only the first was on screen.
+
+`fpl_transfers.entry_history()` reads the real gameweek scores from
+`entry/{id}/history/` - points, bench points, transfers and hits taken, overall rank, squad
+value and bank. A new **Your season** panel leads the fantasy tab with four tiles (total, rank,
+best week, points left on the bench) over a per-gameweek table that puts your score beside what
+the model's squad scored the same week.
+
+It reads as a straight comparison because that is the honest framing - and so far it is not
+flattering to the model:
+
+    GW1  you 59  model 58   +1
+    GW2  you 76  model 70   +6
+    GW3  you 71  model 58  +13
+    GW4  you 30  model  -    -   (not graded yet)
+
+236 points, beating the recommended squad in all three graded weeks. The largest single leak is
+visible in the same table: **26 points left on the bench in GW2**, more than any transfer
+decision has been worth.
