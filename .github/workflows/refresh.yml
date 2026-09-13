@@ -1,0 +1,113 @@
+name: refresh
+
+# WHY THIS EXISTS
+# The desk used to refresh only when the Mac happened to be awake, so a machine asleep at 06:30
+# meant no fantasy squad, no Kalshi settlement and a stale dashboard until the next day. GitHub
+# runs this on its own schedule whether or not any of your machines are on, and publishes the
+# result to a URL that is always up.
+
+on:
+  schedule:
+    # Times are UTC. Kick-offs run 11:00-20:00 UTC and 265 of 380 fixtures are on a Saturday.
+    - cron: '30 5 * * *'          # every day, early - picks up overnight price + injury changes
+    - cron: '0 10,13,16,19 * * 6' # Saturday, around the kick-off slots
+    - cron: '0 12,15,18 * * 0'    # Sunday
+    - cron: '0 18 * * 3'          # Wednesday midweek round
+  workflow_dispatch:              # and a manual "Run workflow" button
+
+# Never let two runs overwrite each other's ledger commits.
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: write        # to commit the updated ledgers and outputs back
+  pages: write           # to publish the dashboard
+  id-token: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -q -r requirements.txt
+
+      # The API response cache. Without it every run refetches per-match stats from scratch,
+      # which is what turned some local runs into 90-minute jobs.
+      - name: Restore API cache
+        uses: actions/cache@v4
+        with:
+          path: dashboard/.cache
+          key: apicache-${{ github.run_id }}
+          restore-keys: apicache-
+
+      - name: Your FPL team id
+        run: |
+          mkdir -p dashboard
+          echo '{"entry_id": ${{ secrets.FPL_ENTRY_ID || 0 }}}' > dashboard/fpl_config.json
+
+      # Each step is its own block so a failure is visible in the Actions UI by name, and
+      # `continue-on-error` keeps one dead feed from costing the whole run - exactly the
+      # cascade that took out four of eight steps on 2026-09-11.
+      - name: Player stats
+        run: python dashboard/build_player_stats.py
+        continue-on-error: true
+      - name: Team stats
+        run: python dashboard/team_stats.py
+        continue-on-error: true
+      - name: FotMob + xG strength index
+        run: python dashboard/fotmob.py
+        continue-on-error: true
+      - name: Rankings
+        run: python build_rankings.py
+        continue-on-error: true
+      - name: Link squads
+        run: python link_squads.py
+        continue-on-error: true
+      - name: Strength
+        run: python compute_strength.py
+        continue-on-error: true
+
+      # This one is NOT continue-on-error: it writes the ledgers and the dashboard. If it
+      # fails the run should fail, loudly.
+      - name: Build dashboard
+        run: python dashboard/build_dashboard.py
+
+      - name: Render standalone page
+        run: python dashboard/make_standalone.py
+
+      # The ledgers are the whole point of the project - they must survive between runs, and
+      # Actions runners are wiped every time.
+      - name: Commit the evidence log
+        run: |
+          git config user.name  "prem-predictor-bot"
+          git config user.email "actions@github.com"
+          git add -A outputs dashboard/*.csv dashboard/refresh_status.json .state || true
+          git diff --cached --quiet || git commit -m "refresh $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push || (git pull --rebase --autostash && git push)
+
+      - name: Package the dashboard for Pages
+        run: |
+          mkdir -p _site
+          cp dashboard/standalone.html _site/index.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  publish:
+    needs: refresh
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
