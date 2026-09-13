@@ -326,8 +326,43 @@ def espn_events(*a, **kw):
         import fotmob
         ev = fotmob.events()
         if ev:
-            return ev
+            return _overlay_odds(ev, *a, **kw)
         print("  ! FotMob returned 0 fixtures - falling back to ESPN")
     except Exception as e:
         print(f"  ! FotMob fixtures unavailable ({e}) - falling back to ESPN")
     return _espn_events_raw(*a, **kw)
+
+
+def _overlay_odds(ev, *a, **kw):
+    """Put ESPN's bookmaker odds back onto FotMob fixtures.
+
+    FotMob carries no closing line - fotmob.events() sets odds=None on every fixture - so
+    making it the fixture source silently zeroed the market side of the desk: the banner went
+    from "20 of 380 priced" to "0 of 380", every edge disappeared, and record_ledger had no
+    line to store against a prediction. Nothing was deleted; the odds simply stopped being
+    fetched. Fixtures still come from FotMob because that is what survives CI, and only the
+    odds are borrowed from ESPN.
+
+    Keyed on (date, home, away), which matched all 380 fixtures and all 12 priced ones when
+    measured - the two feeds agree on naming, so no alias table is needed. ESPN failing is the
+    normal case this module exists to tolerate, so a failure here leaves the fixtures intact
+    and unpriced rather than taking the build down.
+    """
+    try:
+        espn = _espn_events_raw(*a, **kw)
+    except Exception as e:
+        print(f"  ! ESPN odds unavailable ({e}) - fixtures stay unpriced")
+        return ev
+    by_key = {(e.get("utc", "")[:10], e.get("home"), e.get("away")): e.get("odds")
+              for e in espn if e.get("odds")}
+    if not by_key:
+        print("  ! ESPN returned no odds - fixtures stay unpriced")
+        return ev
+    hit = 0
+    for e in ev:
+        o = by_key.get((e.get("utc", "")[:10], e.get("home"), e.get("away")))
+        if o and not e.get("odds"):
+            e["odds"] = o
+            hit += 1
+    print(f"  odds: {hit} of {len(ev)} fixtures priced from ESPN")
+    return ev
