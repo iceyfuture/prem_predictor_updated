@@ -29,6 +29,14 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # The runner's default locale is ASCII, so any non-ASCII character in a print()
+    # raises UnicodeEncodeError and kills the step. Run #1 died exactly this way: the
+    # transfer verdict contained a right-arrow. The arrow is now ASCII, but forcing
+    # UTF-8 here means the next stray character does not take the build down.
+    env:
+      PYTHONIOENCODING: utf-8
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
     steps:
       - uses: actions/checkout@v4
 

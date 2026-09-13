@@ -26,7 +26,19 @@ os.makedirs(CACHE, exist_ok=True)
 ESPN = ("https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/"
         "scoreboard?dates={}&limit=500")
 FPL = "https://fantasy.premierleague.com/api/bootstrap-static/"
-UA = {"User-Agent": "Mozilla/5.0"}
+# ESPN's scoreboard API 403s any browser-like User-Agent. Measured against the live endpoint:
+#     curl/8.7.1            -> 200
+#     Python-urllib/3.12    -> 200
+#     Mozilla/5.0           -> 403
+#     Mozilla/5.0 (full Chrome UA, with Referer) -> 403
+#     prem-predictor/1.0    -> 403
+# So it wants a default library agent, not a spoofed browser - the opposite of the usual rule.
+# The old "Mozilla/5.0" was refused; it only appeared to work locally because every response
+# was being served from the 180-minute disk cache. On the GitHub runner, with no cache, all
+# seven date ranges came back 403 and the build proceeded with 0 fixtures.
+# Sending no User-Agent lets urllib use its own default, which ESPN accepts.
+# Verified with no User-Agent: FPL bootstrap OK, FPL entry OK, ESPN scoreboard OK, Kalshi OK.
+UA = {}
 
 FINISHED = {"STATUS_FULL_TIME", "STATUS_FINAL", "STATUS_FINAL_PEN", "STATUS_FINAL_AET"}
 LIVE = {"STATUS_IN_PROGRESS", "STATUS_HALFTIME", "STATUS_FIRST_HALF", "STATUS_SECOND_HALF"}

@@ -829,3 +829,40 @@ source it used, so a fallback to the snapshot is visible instead of silent:
 
 The MODEL_RULES entry from that worktree could not be applied (the file has moved on
 substantially since) so it is rewritten here; the code changes applied cleanly.
+
+### 24. ESPN 403s any browser User-Agent — 2026-09-13 (found by the first CI run)
+
+GitHub Actions run #1 failed with `IndexError: list index out of range` on `weeks_raw[-1]`.
+The real cause was seven lines above it:
+
+    ! ESPN 20260801-20260915: HTTP Error 403: Forbidden   (x7, every date range)
+      0 fixtures over 0 matchweeks
+
+`feeds.UA` sent `"Mozilla/5.0"`. Measured against the live endpoint:
+
+    curl/8.7.1                                  -> 200
+    Python-urllib/3.12                          -> 200
+    Mozilla/5.0                                 -> 403
+    Mozilla/5.0 (full Chrome UA, with Referer)  -> 403
+    prem-predictor/1.0                          -> 403
+
+ESPN wants a **default library agent, not a spoofed browser** - the opposite of the usual rule.
+`UA = {}` now, letting urllib send its own; FPL and Kalshi were re-verified against it.
+
+**This had been broken locally too and was invisible.** Every response was being served from
+the 180-minute disk cache, so no local build ever hit the network for it. Clearing `.cache`
+reproduced the 403 immediately on this machine. A cache can hide a dead feed indefinitely.
+
+Two guards added, because the failure mode was worse than a crash:
+
+1. **An empty fixture feed now aborts the build.** With 0 events it carried on regardless and
+   `refresh_clubs`, seeing no clubs, concluded **164 players had changed club**. The build only
+   died later, on the empty week list. Had it reached the commit step it would have written 164
+   false transfers into the repo.
+2. **A mass-transfer sanity bar.** A real window moves a handful of players; triple figures
+   means the club list is broken, not that the league emptied out. Same class of error as the
+   223-false-transfer bug from missing FPL_TEAMS aliases.
+
+Also set `PYTHONIOENCODING=utf-8` / `LC_ALL=C.UTF-8` on the Actions job. The runner's default
+locale is ASCII and the transfer verdict contains a right-arrow, which raises UnicodeEncodeError
+mid-print. That was not the cause of run #1, but it would have been the cause of run #2.

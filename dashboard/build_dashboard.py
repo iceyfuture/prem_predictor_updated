@@ -116,6 +116,16 @@ def fold_finished(events):
     """RULE 1's training addition, as a function: this season's finished results, ready to pass
     to dc.fit(extra=...). Extracted so the ranking exports refit exactly the way the dashboard
     does instead of keeping a second copy of the rule that can drift from it."""
+    # A DEAD FEED MUST NOT LOOK LIKE NEWS. GitHub Actions run #1: ESPN answered 403 to every
+    # request, the build carried on with 0 fixtures, and refresh_clubs - seeing no clubs -
+    # concluded that 164 players had changed club. weeks_raw was empty and the build then died
+    # on weeks_raw[-1]. Had it survived to the commit step it would have written 164 false
+    # transfers into the repo. Fail loudly here instead.
+    if not events:
+        raise SystemExit(
+            "ABORT: the fixture feed returned 0 events. Refusing to build on an empty feed - "
+            "it would rewrite squads, ratings and ledgers from nothing. Check ESPN reachability.")
+
     finished = [e for e in events if e["finished"] and e["hs"] is not None]
     if not finished:
         return None
