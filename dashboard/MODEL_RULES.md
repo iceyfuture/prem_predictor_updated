@@ -1074,3 +1074,27 @@ The two dead-end cases are distinguished by `window.claude`:
 Also: `capabilities: {sample: {}}` has to be declared at publish time. Without it
 `claude.use('sample')` resolves `null` and the analyst silently disappears — which is
 exactly what "it won't let me ask anything" looked like.
+
+### Rule 32, corrected — "signed out" and "declined" are the same `null`
+
+The first cut of Rule 32 hid the launcher when `window.claude` was present but `sample`
+resolved `null`, on the assumption that this meant a **declined consent prompt**. It does
+not only mean that. A **signed-out viewer** produces the identical `null`, and the two are
+indistinguishable from inside the page.
+
+Signed out is how every first-time visitor arrives. So that branch hid the chat from
+exactly the people who most needed telling why it was off — reproducing the original
+complaint ("it won't let me ask anything") in a new place.
+
+Both dead ends now keep the launcher and say what is wrong:
+
+| condition | what the viewer sees |
+|---|---|
+| `window.claude` absent (GitHub Pages) | explanation **+ link to the artifact** |
+| `window.claude` present, `sample` null | "sign in to Claude and reload" — no link, they are already here |
+
+One helper, two messages, the link omitted when it would point at the page already open.
+
+The general lesson, which cost two rounds to learn: **hiding a feature is never the right
+answer to "this viewer cannot use it yet."** It is the difference between *unavailable* and
+*broken*, and only one of those is something a viewer can act on.
