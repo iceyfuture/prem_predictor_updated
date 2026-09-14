@@ -1182,3 +1182,59 @@ Calibration is excellent through the middle and **overconfident in both tails**:
 A player the model writes off at 0.7% starts 4.4% of the time; a "nailed-on" 99.2% starter is
 really 94.6%. The fix is mild shrinkage of extreme probabilities toward the base rate — one
 knob, and the gate is that `brier_start` must improve on held-out gameweeks.
+
+## Rule 35 — richer player stats come from a licensed feed
+
+FotMob has no public player-stats endpoint. Getting per-player shots and touches from it means
+scraping player pages: against their terms, and it breaks without warning. This desk is
+published to a public URL and shared with other people, so that is the wrong foundation.
+
+`apifootball.py` uses API-Football instead — same Opta-style stats, key already provisioned,
+read from `API_FOOTBALL_KEY` and never written to disk. Budget is not a constraint: ten
+Premier League fixtures a gameweek is **ten requests against a 100/day allowance**, and a
+finished fixture's stats never change so they are cached permanently.
+
+What it adds over the FPL feed, which is the whole point:
+
+| | FPL `bootstrap-static` | API-Football |
+|---|---|---|
+| xG, xA, xGI, xGC | yes | — |
+| goals, assists, minutes, starts | yes | yes |
+| **shots, shots on target** | no | **yes** |
+| **key passes, dribbles, duels** | no | **yes** |
+| **tackles, interceptions, rating** | no | **yes** |
+
+FPL carries the *outcome* expected-stats; API-Football carries the *volume* underneath them.
+Rule 36 is why that distinction matters.
+
+## Rule 36 — after four games, volume beats outcome
+
+Measured on 19,760 team-matches across 26 seasons (520 team-seasons), predictor built from
+games 1–4 only, target rest-of-season points per game:
+
+```
+shot difference / game    r=+0.618   R²=0.382
+SoT difference / game     r=+0.593
+goal difference / game    r=+0.553
+points / game             r=+0.531      <- the league table is FIFTH
+goals against / game      r=+0.364      <- worst of everything tested
+```
+
+Shot difference beats goal difference, bootstrap 95% CI on the gap **[+0.003, +0.127]** —
+excludes zero. And it never reverses: shots stay ahead at every horizon from 2 to 20 games,
+though the edge is spent by about GW8 (+0.105 at N=2, +0.065 at N=4, +0.010 at N=8).
+
+Two consequences worth stating plainly:
+
+- **The league table is a worse guide to the future than four other statistics.** At GW4 of
+  2026/27 it rates Hull 3rd (14th on shot difference, xGD −2.28) and Man United 13th (**1st**
+  on shot difference, +11.0/game).
+- **Goals against at four games is nearly pure noise.** Clean sheets this early tell you
+  almost nothing.
+
+Dixon-Coles currently fits on **goals only**; `fotmob.strength_index` knows about xG but feeds
+nothing. The minimal change is to point the existing `apply_cold_start` shrinkage (K=15) at a
+shot-derived strength estimate instead of a generic prior, decaying to zero by ~GW8.
+
+**Gate: 1X2 Brier and RPS must improve or hold on held-out seasons in the walk-forward, with
+the gain concentrated in GW1–8. In-sample-only improvement does not ship.**
