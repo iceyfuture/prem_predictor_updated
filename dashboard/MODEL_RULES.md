@@ -1098,3 +1098,87 @@ One helper, two messages, the link omitted when it would point at the page alrea
 The general lesson, which cost two rounds to learn: **hiding a feature is never the right
 answer to "this viewer cannot use it yet."** It is the difference between *unavailable* and
 *broken*, and only one of those is something a viewer can act on.
+
+## Rule 33 — compare two books on the same markets
+
+`avg()` skips blanks, so averaging `brier_model` over every settled prop and `brier_kalshi`
+over only the quoted ones scored the model on **440** markets and Kalshi on **387**. The 53
+extras are exactly the long-shot correct-scorelines Kalshi declines to quote, which the model
+prices near zero and almost always gets right — free wins, counted only for our side.
+
+That artifact was **~88% of the reported edge**: 0.0099 → **0.0012** once matched.
+
+Fixed, and two honest statistics added beside the mean:
+
+| | before | after |
+|---|---|---|
+| Brier model vs Kalshi | 0.1398 vs 0.1497 | **0.1437 vs 0.1449** (same 387) |
+| median edge / market | — | **−0.0002** |
+| t, clustered by fixture | — | **−0.05** over 39 |
+
+A Brier mean is dominated by outliers: five markets of 387 carried **224%** of the model's
+total edge, and removing them left it **behind** on the other 382. The median says what a
+typical market did; clustering by fixture respects that props inside one match are not
+independent. Both say no edge.
+
+`by_kind` also only reported `btts`/`total`/`spread` — hiding **128 of 440** settled props,
+including `tcorners`, the class with the supposedly validated edge. It now enumerates whatever
+is in the ledger. (`tcorners` on 27 matched markets: model 0.2500 vs Kalshi 0.2409 — behind.)
+
+## Rule 34 — players get a ledger too
+
+Match outcomes and prop markets have been forward-tested since day one. Players never were:
+`fpl_minutes.predict` and `simulate_fpl.project_gw` emitted a start probability, expected
+minutes and projected points for ~485 players every build, and nothing ever checked them. The
+only player grading was `fpl_forward.csv` — 60 rows covering the user's own XI.
+
+`player_ledger.py` locks one row per (gameweek, player) before kickoff and grades it after:
+`p_start, xmin, p_score, proj` → `started, minutes, goals, assists, points` →
+`brier_start, ae_minutes, brier_score, err_points`.
+
+### Two bugs found while building it, both of which would have produced false findings
+
+**1. Selection bias.** `fpl_player_gameweek_2026_27.csv` contains only players who APPEARED —
+405 of 658 players, and not one row with `minutes == 0`. Grading against it alone conditions on
+getting on the pitch:
+
+| | naive (appeared only) | correct (+1,045 non-appearances) |
+|---|---|---|
+| n | 929 | **1,974** |
+| predicted start rate | 57.3% | 33.4% |
+| actual start rate | 71.0% | **33.4%** |
+| apparent bias | **−13.7 pts** | **+0.0 pts** |
+| Brier vs base rate | +13.3% skill | **+50.0% skill** |
+
+The naive read said the minutes model was badly broken. It is not — it is well calibrated. A
+player whose **club** played and who has no row did not play: that is a 0, and omitting those
+zeros inverted the conclusion.
+
+**2. Retrodiction.** The first run locked 485 GW4 rows a day after GW4 was played. Without a
+guard those would have scored as a forward test. Rows locked at or after that gameweek's first
+kickoff are now stamped `late=1` and excluded from every statistic — RULE 5, enforced in code
+rather than by hoping the build runs on time.
+
+### What the leak-free backfill actually says
+
+`features()` uses only gameweeks strictly before `gw`, so GW1–3 can be evaluated honestly
+(caveat: `players` carries today's price and availability, a small forward leak).
+
+```
+START    Brier 0.1112  vs base-rate 0.2226   skill +50.0%
+MINUTES  MAE 17.4 min (all)   23.6 min (appeared)
+bias     predicted 33.4%  actual 33.4%   +0.0 pts
+```
+
+Calibration is excellent through the middle and **overconfident in both tails**:
+
+| band | n | predicted | actual | gap |
+|---|---|---|---|---|
+| 0–5% | 618 | 0.7% | 4.4% | **+3.7** |
+| 35–65% | 350 | 48.8% | 48.6% | −0.2 |
+| 65–85% | 123 | 74.4% | 74.8% | +0.4 |
+| 95–100% | 202 | 99.2% | 94.6% | **−4.6** |
+
+A player the model writes off at 0.7% starts 4.4% of the time; a "nailed-on" 99.2% starter is
+really 94.6%. The fix is mild shrinkage of extreme probabilities toward the base rate — one
+knob, and the gate is that `brier_start` must improve on held-out gameweeks.

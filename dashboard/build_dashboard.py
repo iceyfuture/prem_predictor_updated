@@ -16,7 +16,7 @@ EDGES: where a book has priced a game, edge = model EV against the vig-free line
 
 RUN:  ~/prem_predictor/.venv/bin/python dashboard/build_dashboard.py
 """
-import csv, json, os, sys
+import csv, json, math, os, sys
 from datetime import datetime, timezone, timedelta
 
 import numpy as np
@@ -529,18 +529,55 @@ def record_props_ledger(weeks, built_at):
     def avg(k, src):
         v = [float(x[k]) for x in src if x.get(k) not in (None, "")]
         return round(sum(v) / len(v), 4) if v else None
+
+    # RULE 33: compare the two books on the SAME markets. avg() skips blanks, so averaging
+    # brier_model over every settled row and brier_kalshi over only the quoted ones put the
+    # model's score over 440 markets and Kalshi's over 387 - and the 53 extras are precisely
+    # the long-shot scorelines Kalshi declines to quote, which the model prices near zero and
+    # almost always gets right. Those free wins flattered the model by ~88% of the reported
+    # gap (0.0099 -> 0.0012 once matched). Head-to-head numbers now use `matched` only.
+    matched = [r for r in settled
+               if r.get("brier_model") not in (None, "") and r.get("brier_kalshi") not in (None, "")]
+    # Every kind that is actually in the ledger, not a hardcoded three. The old list omitted
+    # `tcorners` and `score` - 128 of 440 settled props - so the breakdown hid the corners
+    # model, which is the one class with a validated edge (+7.7% MAE over a naive baseline).
     by_kind = {}
-    for kind in ("btts", "total", "spread"):
-        sub = [r for r in settled if r["kind"] == kind]
+    for kind in sorted({r["kind"] for r in matched}):
+        sub = [r for r in matched if r["kind"] == kind]
         if sub:
             by_kind[kind] = {"n": len(sub), "brier_model": avg("brier_model", sub),
-                             "brier_kalshi": avg("brier_kalshi", sub)}
+                             "brier_kalshi": avg("brier_kalshi", sub),
+                             "model_wins": sum(1 for r in sub if r.get("closer") == "model"),
+                             "kalshi_wins": sum(1 for r in sub if r.get("closer") == "kalshi")}
+
+    # A Brier MEAN is dominated by a handful of large disagreements: on this ledger five
+    # markets of 387 accounted for 224% of the model's total edge, and stripping them left it
+    # behind on the other 382. The median says what the TYPICAL market did, and a t-test
+    # clustered by fixture respects that props inside one match are not independent draws.
+    edges = [float(r["brier_kalshi"]) - float(r["brier_model"]) for r in matched]  # +ve = model
+    med = t_cl = None
+    if edges:
+        e = sorted(edges); n = len(e)
+        med = round((e[n // 2] if n % 2 else (e[n // 2 - 1] + e[n // 2]) / 2), 5)
+        byfx = {}
+        for r, x in zip(matched, edges):
+            byfx.setdefault((r["gw"], r["home"], r["away"]), []).append(x)
+        cl = [sum(v) / len(v) for v in byfx.values()]
+        if len(cl) > 2:
+            m = sum(cl) / len(cl)
+            var = sum((c - m) ** 2 for c in cl) / (len(cl) - 1)
+            t_cl = round(m / math.sqrt(var / len(cl)), 2) if var > 0 else None
+
     print(f"  props ledger: {len(rows)} markets locked, {quoted} with a real Kalshi quote, "
-          f"{len(settled)} settled")
+          f"{len(settled)} settled ({len(matched)} head-to-head)")
     return {"tracked": len(rows), "quoted": quoted, "settled": len(settled),
-            "brier_model": avg("brier_model", settled), "brier_kalshi": avg("brier_kalshi", settled),
-            "model_wins": sum(1 for r in settled if r.get("closer") == "model"),
-            "kalshi_wins": sum(1 for r in settled if r.get("closer") == "kalshi"),
+            "matched": len(matched),
+            "brier_model": avg("brier_model", matched), "brier_kalshi": avg("brier_kalshi", matched),
+            "brier_model_all": avg("brier_model", settled),
+            "median_edge": med, "t_clustered": t_cl, "clusters": len(set(
+                (r["gw"], r["home"], r["away"]) for r in matched)),
+            "model_wins": sum(1 for r in matched if r.get("closer") == "model"),
+            "kalshi_wins": sum(1 for r in matched if r.get("closer") == "kalshi"),
             "by_kind": by_kind,
             "board": [{"gw": int(r["gw"]), "fixture": f"{r['home']} v {r['away']}",
                        "label": r["label"], "model": float(r["model"]) if r.get("model") else None,
@@ -1011,6 +1048,25 @@ def build():
     fpl_players = sf.fpl_players()
     active_rows = sf.project_gw(active_gw, players=fpl_players, model=model, shares=shares, weeks=weeks_raw)
     active_team = sf.build_team(active_gw, weeks=weeks_raw, team_meta=team_meta, rows=active_rows)
+
+    # RULE 34: lock EVERY player projection before kickoff, then grade it. Match outcomes and
+    # prop markets have been forward-tested since day one; players never were, so the minutes
+    # model and the scorer model have been emitting numbers for weeks with nothing checking
+    # them. One row per (gw, player), written once and never restated.
+    try:
+        import player_ledger as pl
+        players_graded = pl.record(
+            active_gw, active_rows, now_dt.isoformat(timespec="minutes"),
+            finished=bool(last_finished and last_finished >= active_gw),
+            first_ko=first_ko)
+        pg = players_graded
+        print(f"  player ledger: {pg['tracked']} locked (+{pg.get('locked_now', 0)} new), "
+              f"{pg.get('graded', 0)} graded"
+              + (f" | start Brier {pg['brier_start']} vs {pg['brier_start_base']} base, "
+                 f"minutes MAE {pg['mae_minutes']}" if pg.get("graded") else ""))
+    except Exception as e:                    # never let the ledger take the build down
+        players_graded = None
+        print(f"  ! player ledger skipped ({e})")
     # ---- TRANSFER REALITY: you hold last week's squad and get ONE free transfer (extras -4).
     # build_team drafts from scratch, which is only reachable in GW1 or on a wildcard, so we
     # also compute what you can actually GET TO from the squad you hold. ----
@@ -1179,6 +1235,9 @@ def build():
 
     # RULE 5: record every prediction (with the closing line) BEFORE kickoff, then grade it
     # against the result + closing odds once the game is played. This is the live evidence log.
+    if players_graded:
+        data["players_graded"] = players_graded
+
     data["results"] = match_log()
     if data["results"].get("matches"):
         r = data["results"]

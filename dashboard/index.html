@@ -928,7 +928,12 @@ function analystContext(){
   L.push('\nTRACK RECORD SO FAR THIS SEASON:');
   L.push('  1X2: '+st.settled+' graded. Model Brier '+st.brier_model+' vs Kalshi '+st.brier_kalshi+
          '. Head to head model '+st.model_wins+' - '+st.kalshi_wins+' Kalshi.');
-  L.push('  Props: '+sp.settled+' settled. Model Brier '+sp.brier_model+' vs Kalshi '+sp.brier_kalshi+'.');
+  L.push('  Props: '+sp.settled+' settled, '+(sp.matched||sp.settled)+' with a Kalshi quote to compare against.');
+  L.push('    Brier model '+sp.brier_model+' vs Kalshi '+sp.brier_kalshi+' on those same markets.');
+  L.push('    Head to head model '+sp.model_wins+' - '+sp.kalshi_wins+' Kalshi. MEDIAN edge per market '+
+         sp.median_edge+', t clustered by fixture '+sp.t_clustered+' over '+sp.clusters+' fixtures.');
+  L.push('    The mean Brier favours the model only because a few large disagreements dominate an average.');
+  L.push('    The median and the clustered t are the honest read, and they show NO edge. Say so if asked.');
   L.push(
 '\nWHAT THE EVIDENCE LOG SAYS - you MUST respect these when answering:\n'+
 '  * On match outcomes the model does NOT beat the market. Blending it toward the closing line\n'+
@@ -1191,10 +1196,13 @@ function propsForwardHTML(){
       <p class="panel-hint">Kalshi has only opened props on a single fixture so far and every quote is still thin (no volume, wide spread), so none is counted as a live quote yet. The model's own prop prices are locked for all ${p.tracked.toLocaleString()} markets regardless, so they can be graded the moment results land.</p>`;
   }
   const better=(a,b)=>a!=null&&b!=null?(a<b?'pos':'neg'):'';
-  const kindRows=Object.entries(p.by_kind||{}).map(([k,v])=>
-    `<tr><td>${k==='btts'?'Both teams to score':k==='total'?'Total goals':'Spread'}</td><td>${v.n}</td>
+  const KIND={btts:'Both teams to score',total:'Total goals',spread:'Spread',
+              tcorners:'Team corners',score:'Correct score'};
+  const kindRows=Object.entries(p.by_kind||{}).sort((a,b)=>b[1].n-a[1].n).map(([k,v])=>
+    `<tr><td>${KIND[k]||esc(k)}</td><td>${v.n}</td>
      <td class="${better(v.brier_model,v.brier_kalshi)}">${v.brier_model??'\u2014'}</td>
-     <td class="${better(v.brier_kalshi,v.brier_model)}">${v.brier_kalshi??'\u2014'}</td></tr>`).join('');
+     <td class="${better(v.brier_kalshi,v.brier_model)}">${v.brier_kalshi??'\u2014'}</td>
+     <td>${v.model_wins??'\u2014'}&ndash;${v.kalshi_wins??'\u2014'}</td></tr>`).join('');
   const rows=p.board.map(r=>`<tr><td>MW${r.gw}</td><td>${esc(r.fixture)}</td><td>${esc(r.label)}</td>
       <td>${r.model!=null?r.model+'%':'\u2014'}</td><td>${r.kalshi!=null?r.kalshi+'%':'\u2014'}</td>
       <td>${esc(r.settled)} <small>(${esc(r.result)})</small></td>
@@ -1204,8 +1212,17 @@ function propsForwardHTML(){
       <div class="bt-tile"><div class="lbl">Settled props</div><div class="val">${p.settled}</div><div class="sub">of ${p.tracked.toLocaleString()} locked</div></div>
       <div class="bt-tile"><div class="lbl">Model closer</div><div class="val">${p.model_wins}</div><div class="sub">vs Kalshi ${p.kalshi_wins}</div></div>
       <div class="bt-tile"><div class="lbl">Brier &mdash; model</div><div class="val ${better(p.brier_model,p.brier_kalshi)}">${p.brier_model??'\u2014'}</div><div class="sub">binary</div></div>
-      <div class="bt-tile"><div class="lbl">Brier &mdash; Kalshi</div><div class="val ${better(p.brier_kalshi,p.brier_model)}">${p.brier_kalshi??'\u2014'}</div><div class="sub">where quoted</div></div></div>
-    ${kindRows?`<figure class="evidence-block" style="margin-top:14px"><p>By market type.</p><table class="ktab"><thead><tr><th>Market</th><th>n</th><th>Brier M</th><th>Brier K</th></tr></thead><tbody>${kindRows}</tbody></table></figure>`:''}
+      <div class="bt-tile"><div class="lbl">Brier &mdash; Kalshi</div><div class="val ${better(p.brier_kalshi,p.brier_model)}">${p.brier_kalshi??'\u2014'}</div><div class="sub">same ${p.matched??p.settled} markets</div></div>
+      <div class="bt-tile"><div class="lbl">Median edge</div><div class="val ${p.median_edge>0?'pos':p.median_edge<0?'neg':''}" style="font-size:20px">${p.median_edge!=null?(p.median_edge>0?'+':'')+p.median_edge.toFixed(4):'\u2014'}</div><div class="sub">the typical market</div></div>
+      <div class="bt-tile"><div class="lbl">t, clustered</div><div class="val" style="font-size:20px">${p.t_clustered??'\u2014'}</div><div class="sub">${p.clusters??0} fixtures</div></div></div>
+    <p class="panel-hint" style="color:var(--amber)"><b>Read the median, not the mean.</b> Brier is an average, so a
+    handful of big disagreements dominate it &mdash; five markets of ${p.matched??0} carried more than the model's whole
+    edge, and removing them puts it behind on the rest. The median says what a <i>typical</i> market did, and the
+    t-statistic is clustered by fixture because props inside one match are not independent.
+    ${p.brier_model_all!=null?`The model's Brier across all ${p.settled} settled markets is ${p.brier_model_all}, but that
+    includes ${p.settled-(p.matched??p.settled)} long-shot scorelines Kalshi never quoted &mdash; near-certain
+    "NO" bets that flatter the average. Only the ${p.matched} matched markets are a fair comparison.`:''}</p>
+    ${kindRows?`<figure class="evidence-block" style="margin-top:14px"><p>By market type.</p><table class="ktab"><thead><tr><th>Market</th><th>n</th><th>Brier M</th><th>Brier K</th><th>M&ndash;K closer</th></tr></thead><tbody>${kindRows}</tbody></table></figure>`:''}
     <figure class="evidence-block" style="margin-top:14px"><p>Settled prop markets, newest first.</p>
     <table class="ktab"><thead><tr><th>MW</th><th>Fixture</th><th>Market</th><th>Model</th><th>Kalshi</th><th>Settled</th><th>Brier M</th><th>Brier K</th></tr></thead><tbody>${rows}</tbody></table></figure>`;
 }
