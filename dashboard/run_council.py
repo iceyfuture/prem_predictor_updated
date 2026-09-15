@@ -33,6 +33,7 @@ sys.path.insert(0, HERE)
 
 import council as C                      # noqa: E402  (MatchContext, predict)
 import council_ledger as L               # noqa: E402
+import council_reasoning as CR           # noqa: E402
 
 PAYLOAD = os.path.join(HERE, "dashboard.json")
 
@@ -122,13 +123,13 @@ def upcoming(days=7, now=None, payload=None, events=None, fixture=None):
 
 
 def run(days=7, live=False, fixture=None, limit=None, now=None,
-        payload=None, events=None, ledger_path=None, out=print):
+        payload=None, events=None, ledger_path=None, reasoning_path=None, out=print):
     """Decide, and (only with live=True) act. Returns a summary dict."""
     rows = upcoming(days=days, now=now, payload=payload, events=events, fixture=fixture)
     out("AI Council runner" + ("" if live else "   [DRY RUN - no Claude calls, no writes]"))
     out("")
 
-    locked_n = would_run = ran = failed = 0
+    locked_n = would_run = ran = failed = reasoning_failed = 0
     errors = []
     for r in rows:
         out(f"{r['match']['home']} vs {r['match']['away']}"
@@ -162,24 +163,52 @@ def run(days=7, live=False, fixture=None, limit=None, now=None,
             out(f"  FAILED -> {type(e).__name__}: {e}")
             out("  nothing written for this fixture")
             continue
-        row = L.record(ctx, prediction, path=ledger_path)
+        try:
+            row = L.record(ctx, prediction, path=ledger_path)
+        except Exception as e:
+            # The lock failed, so this forecast does not exist as far as the desk is
+            # concerned. Writing reasoning for it would leave an orphan explaining a
+            # prediction no ledger row claims.
+            failed += 1
+            errors.append((r["key"], f"ledger lock failed: {type(e).__name__}: {e}"))
+            out(f"  FAILED -> could not lock: {type(e).__name__}: {e}")
+            out("  no reasoning written")
+            continue
         ran += 1
         h, d, a = prediction.probabilities()
         out(f"  RAN -> council {h:.2f}/{d:.2f}/{a:.2f} {prediction.predicted_outcome}"
             f"  consensus {prediction.consensus_score}"
             f"{'  [LATE]' if row.get('late') else ''}")
 
+        # The ledger row is locked and correct from here on. A reasoning failure is a
+        # SIDECAR problem: report it loudly, but never re-run Claude (four more calls for a
+        # forecast we already have) and never touch the locked row to "fix" it.
+        try:
+            wrote = CR.append(ctx, prediction, locked_at=row.get("locked_at"),
+                              path=reasoning_path)
+            if wrote is None:
+                out("  reasoning already recorded for this fixture - not duplicated")
+        except Exception as e:
+            reasoning_failed += 1
+            errors.append((r["key"], f"reasoning not saved: {type(e).__name__}: {e}"))
+            out(f"  WARNING -> forecast is LOCKED but reasoning was not saved: "
+                f"{type(e).__name__}: {e}")
+            out("  the ledger row stands; Claude was NOT re-run")
+
     out("")
     out("Summary:")
     out(f"  upcoming: {len(rows)}")
     out(f"  locked: {locked_n}")
     out(f"  {'ran' if live else 'would_run'}: {ran if live else would_run}")
+    if live and reasoning_failed:
+        out(f"  reasoning not saved: {reasoning_failed} (forecasts still locked)")
     if live and failed:
         out(f"  failed: {failed}")
         for k, msg in errors:
             out(f"    {k}: {msg}")
     return {"upcoming": len(rows), "locked": locked_n, "would_run": would_run,
-            "ran": ran, "failed": failed, "errors": errors,
+            "ran": ran, "failed": failed, "reasoning_failed": reasoning_failed,
+            "errors": errors,
             "keys": [r["key"] for r in rows], "live": live}
 
 

@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import council as C
 import council_ledger as L
+import council_reasoning as CR
 import run_council as R
 
 PASS = FAIL = 0
@@ -99,11 +100,18 @@ def main():
     tmp = tempfile.mkdtemp(prefix="run_council_test_")
     real_before = (os.path.exists(L.PATH),
                    open(L.PATH).read() if os.path.exists(L.PATH) else None)
+    reasoning_before = (os.path.exists(CR.PATH),
+                        open(CR.PATH).read() if os.path.exists(CR.PATH) else None)
 
     def fresh(name="l.csv"):
         return os.path.join(tmp, name)
 
-    common = dict(now=NOW, payload=PAYLOAD, events=EVENTS, out=silent)
+    # reasoning_path MUST be redirected too. Without it CR.append() defaults to the real
+    # dashboard/council_reasoning.jsonl - which is exactly what happened when the sidecar was
+    # wired into run_council.py and this file still only overrode ledger_path. The test that
+    # caught it lives in test_council_reasoning.py; this comment is so it cannot come back.
+    common = dict(now=NOW, payload=PAYLOAD, events=EVENTS, out=silent,
+                  reasoning_path=os.path.join(tmp, "reasoning.jsonl"))
 
     print("=== fixture selection ===")
     up = R.upcoming(days=7, now=NOW, payload=PAYLOAD, events=EVENTS)
@@ -214,6 +222,10 @@ def main():
     check("only that row written", lambda: _assert(list(L.load(p)) == ["Liverpool|Everton"]))
 
     print("\n=== the REAL ledger and the real fixture ===")
+    check("real council_reasoning.jsonl unchanged",
+          lambda: _assert((os.path.exists(CR.PATH),
+                           open(CR.PATH).read() if os.path.exists(CR.PATH) else None)
+                          == reasoning_before))
     check("real council_ledger.csv unchanged",
           lambda: _assert((os.path.exists(L.PATH),
                            open(L.PATH).read() if os.path.exists(L.PATH) else None)
