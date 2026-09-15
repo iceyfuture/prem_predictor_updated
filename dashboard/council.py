@@ -23,7 +23,8 @@ five corner props), and cold-start K as an accuracy gain (t=0.83). Each looked r
 was measured. A layer that can quietly alter the baseline it is measured against cannot be
 measured at all, so the Council stays outside the blend until its own ledger says otherwise.
 
-STATUS: skeleton. `predict()` raises NotImplementedError - see the note there.
+STATUS: all four seats live. `predict()` runs the full in-memory pipeline - three specialists
+concurrently, then the Chairman. It writes nothing: no files, no ledger, no cache.
 """
 import asyncio
 import json
@@ -293,26 +294,8 @@ class CouncilPrediction:
                 "consensus_score": round(self.consensus_score, 6)}
 
 
-# ----------------------------------------------------------------------------- entry point
-def predict(context: MatchContext) -> CouncilPrediction:
-    """Run the Council over one fixture.
-
-    NOT IMPLEMENTED. The panel needs the Claude Agent SDK to actually reason over the context,
-    and that is a later step by design: the dataclasses, their validation and the ledger
-    columns are worth settling while they are cheap to change, and before anything can be
-    graded on retrodictions.
-
-    When it is implemented it must obey two constraints from this module's docstring:
-      * it may not modify the Dixon-Coles probabilities or the production blend
-      * its output must be locked BEFORE kickoff to count - see council_ledger.late
-    """
-    raise NotImplementedError(
-        "AI Council prediction is not implemented yet. This skeleton defines the data "
-        "contract (MatchContext, AnalystPrediction, CouncilPrediction) and its validation; "
-        "the Claude Agent SDK panel that fills it in is a later step. Nothing calls this "
-        "function yet - it is deliberately not wired into build_dashboard.py.")
-
-
+# The Council's public entry point - predict() / predict_async() - is defined at the END
+# of this module, after every seat it orchestrates exists.
 # ===========================================================================================
 # THE QUANT ANALYST — the first runtime Council member.
 #
@@ -1321,3 +1304,81 @@ def run_chairman(context: MatchContext,
                  analysts: List[AnalystPrediction]) -> CouncilPrediction:
     """Synchronous entry point for the Chairman."""
     return _sync(run_chairman_async(context, analysts), CHAIRMAN_NAME)
+
+
+# ===========================================================================================
+# ORCHESTRATION — the whole Council, in memory, for one fixture.
+#
+#     MatchContext ──┬─► Quant Analyst  ─┐
+#                    ├─► Context Analyst ├─► Chairman ─► CouncilPrediction
+#                    └─► Market Skeptic ─┘
+#
+# The three specialists run CONCURRENTLY and the Chairman runs strictly after all three have
+# returned - it cannot synthesise opinions that do not exist yet. Concurrency is not a
+# micro-optimisation here: each seat spawns its own Claude Code subprocess and the smoke tests
+# measured 9-19s per specialist, so sequential execution would put a single fixture near two
+# minutes before the Chairman even starts.
+#
+# WHAT THIS DELIBERATELY DOES NOT DO
+#   * no retries - a flaky answer silently retried is an answer you cannot reason about
+#   * no fallback to two analysts - a panel that quietly shrinks is not the panel you tested
+#   * no averaging as a substitute for a missing seat - that is a different, untested model
+#   * no caching, no file writes, no ledger - orchestration only, by design
+# Every one of those is a place where a failure could become invisible, and this project has
+# already been bitten by numbers that looked fine because something upstream failed quietly
+# (the empty-feed build that rewrote 164 transfers; the ledger graded on retrodictions).
+# ===========================================================================================
+
+# Stable order in, stable order out. The Chairman anonymises these as Analyst A/B/C, but the
+# ORDER is fixed so two runs on identical inputs present the panel identically - the only way
+# a disagreement between runs can be attributed to the model rather than to shuffling.
+SPECIALIST_ORDER = (QUANT_ANALYST_NAME, CONTEXT_ANALYST_NAME, MARKET_SKEPTIC_NAME)
+
+
+async def predict_async(context: MatchContext) -> CouncilPrediction:
+    """Run the full Council over one fixture and return the Chairman's synthesis.
+
+    Raises CouncilSDKError naming the seat that failed, or CouncilParseError /
+    CouncilValidationError if a seat answered but answered badly. Nothing is retried and
+    nothing is written.
+    """
+    if not isinstance(context, MatchContext):
+        raise CouncilValidationError(
+            f"expected MatchContext, got {type(context).__name__}")
+
+    # every seat gets the SAME context object - each serialiser decides what it may show
+    runners = (run_quant_analyst_async, run_context_analyst_async, run_market_skeptic_async)
+    results = await asyncio.gather(*(r(context) for r in runners), return_exceptions=True)
+
+    # return_exceptions=True so a failure does not cancel the siblings mid-subprocess AND so
+    # the failing seat can be named. gather preserves input order, so index == seat.
+    failures = [(name, r) for name, r in zip(SPECIALIST_ORDER, results)
+                if isinstance(r, BaseException)]
+    if failures:
+        names = ", ".join(n for n, _ in failures)
+        first_name, first_err = failures[0]
+        raise CouncilSDKError(
+            f"Council aborted for {context.fixture_key()}: specialist(s) failed: {names}. "
+            f"The Chairman was NOT run and no substitute was used. "
+            f"First failure ({first_name}): {type(first_err).__name__}: {first_err}"
+        ) from first_err
+
+    analysts = list(results)            # [quant, context, market] - SPECIALIST_ORDER
+    try:
+        return await run_chairman_async(context, analysts)
+    except (CouncilSDKError, CouncilParseError, CouncilValidationError):
+        raise                           # already specific; re-raising loses nothing
+    except Exception as e:
+        raise CouncilSDKError(
+            f"the Chairman failed for {context.fixture_key()} after all three specialists "
+            f"returned: {type(e).__name__}: {e}") from e
+
+
+def predict(context: MatchContext) -> CouncilPrediction:
+    """Run the Council synchronously. The public entry point.
+
+    Owns the asyncio boundary, exactly like the per-seat wrappers, so build_dashboard.py and
+    the rest of the pipeline stay synchronous. Returns a validated CouncilPrediction with the
+    three specialist opinions attached; writes nothing anywhere.
+    """
+    return _sync(predict_async(context), "council")

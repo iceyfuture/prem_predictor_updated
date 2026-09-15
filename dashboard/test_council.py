@@ -10,6 +10,7 @@ run_quant_analyst_async, is exercised only through the pieces around it.
 import asyncio
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -596,9 +597,14 @@ def main():
     check("sync wrapper exists", lambda: _assert(callable(C.run_quant_analyst)))
     check("async version is a coroutine function",
           lambda: _assert(asyncio.iscoroutinefunction(C.run_quant_analyst_async)))
-    check("council predict() still NotImplemented", lambda: C.predict(FULL), NotImplementedError)
+    check("predict / predict_async exist",
+          lambda: _assert(callable(C.predict) and asyncio.iscoroutinefunction(C.predict_async)))
+    check("predict rejects a non-MatchContext",
+          lambda: asyncio.run(C.predict_async("nope")), C.CouncilValidationError)
     check("sync wrapper refuses a running loop",
           lambda: asyncio.run(_call_from_loop()), C.CouncilSDKError)
+
+    orchestration_tests()
 
     print(f"\n  {PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0
@@ -606,6 +612,205 @@ def main():
 
 async def _call_from_loop():
     return C.run_quant_analyst(BARE)   # must raise, not deadlock
+
+
+# ---------------------------------------------------------------- orchestration, fully mocked
+class _Spy:
+    """Stands in for the four seats. Records call order, timing and arguments.
+
+    NOTHING here touches the Agent SDK - every 'seat' is a local coroutine, so the whole
+    orchestration suite runs offline and for free.
+    """
+    def __init__(self):
+        self.events = []          # (event, name, monotonic)
+        self.ctx_seen = []
+        self.chair_args = None
+        self.fail = {}            # name -> exception to raise
+        self.delay = 0.05
+
+    def _stamp(self, ev, name):
+        self.events.append((ev, name, time.monotonic()))
+
+    def seat(self, name):
+        async def run(context):
+            self._stamp("start", name)
+            self.ctx_seen.append((name, context))
+            await asyncio.sleep(self.delay)      # simulate a subprocess round trip
+            if name in self.fail:
+                self._stamp("fail", name)
+                raise self.fail[name]
+            self._stamp("end", name)
+            return C.AnalystPrediction(
+                analyst_name=name, home_probability=.4, draw_probability=.3,
+                away_probability=.3, predicted_outcome=C.HOME, confidence=.5,
+                evidence=[f"{name} evidence"], uncertainties=[f"{name} uncertainty"])
+        return run
+
+    def chairman(self):
+        async def run(context, analysts):
+            self._stamp("start", "chairman")
+            self.chair_args = (context, list(analysts))
+            await asyncio.sleep(0.01)
+            if "chairman" in self.fail:
+                raise self.fail["chairman"]
+            self._stamp("end", "chairman")
+            return C.CouncilPrediction(
+                home_probability=.41, draw_probability=.28, away_probability=.31,
+                predicted_outcome=C.HOME, confidence=.25, consensus_score=.4,
+                major_disagreement=True, disagreement_note="mocked",
+                analyst_predictions=list(analysts))
+        return run
+
+    def install(self):
+        self.saved = (C.run_quant_analyst_async, C.run_context_analyst_async,
+                      C.run_market_skeptic_async, C.run_chairman_async)
+        C.run_quant_analyst_async = self.seat("quant")
+        C.run_context_analyst_async = self.seat("context")
+        C.run_market_skeptic_async = self.seat("market")
+        C.run_chairman_async = self.chairman()
+        return self
+
+    def restore(self):
+        (C.run_quant_analyst_async, C.run_context_analyst_async,
+         C.run_market_skeptic_async, C.run_chairman_async) = self.saved
+
+    def at(self, ev, name):
+        return next(t for e, n, t in self.events if e == ev and n == name)
+
+    def names(self, ev):
+        return [n for e, n, _ in self.events if e == ev]
+
+
+def orchestration_tests():
+    CTX = C.MatchContext("Brentford", "Chelsea", model_home=.42, model_draw=.26, model_away=.32)
+
+    print("\n=== ORCHESTRATION: the happy path (all mocked, no network) ===")
+    spy = _Spy().install()
+    try:
+        res = asyncio.run(C.predict_async(CTX))
+        check("returns a CouncilPrediction",
+              lambda: _assert(isinstance(res, C.CouncilPrediction)))
+        check("all three specialists ran",
+              lambda: _assert(set(spy.names("start")) >= {"quant", "context", "market"}))
+        check("chairman ran once", lambda: _assert(spy.names("start").count("chairman") == 1))
+        check("each specialist called exactly once",
+              lambda: _assert(all(spy.names("start").count(n) == 1
+                                  for n in ("quant", "context", "market"))))
+        check("all three got the SAME context object",
+              lambda: _assert(all(c is CTX for _, c in spy.ctx_seen) and len(spy.ctx_seen) == 3))
+        check("chairman got the same context too",
+              lambda: _assert(spy.chair_args[0] is CTX))
+        check("chairman got exactly three analysts",
+              lambda: _assert(len(spy.chair_args[1]) == 3))
+        check("chairman got quant/context/market ORDER",
+              lambda: _assert([a.analyst_name for a in spy.chair_args[1]]
+                              == ["quant", "context", "market"]))
+        check("result carries the three analysts",
+              lambda: _assert(len(res.analyst_predictions) == 3))
+
+        print("\n=== ORCHESTRATION: concurrency, not sequence ===")
+        last_start = max(spy.at("start", n) for n in ("quant", "context", "market"))
+        first_end = min(spy.at("end", n) for n in ("quant", "context", "market"))
+        check("every specialist STARTED before any FINISHED (truly concurrent)",
+              lambda: _assert(last_start < first_end))
+        span = max(spy.at("end", n) for n in ("quant", "context", "market")) - \
+            min(spy.at("start", n) for n in ("quant", "context", "market"))
+        check(f"wall time ~one delay, not three ({span*1000:.0f}ms vs {spy.delay*3*1000:.0f}ms serial)",
+              lambda: _assert(span < spy.delay * 2))
+        check("chairman started AFTER the last specialist finished",
+              lambda: _assert(spy.at("start", "chairman") >=
+                              max(spy.at("end", n) for n in ("quant", "context", "market"))))
+    finally:
+        spy.restore()
+
+    print("\n=== ORCHESTRATION: a specialist failure stops everything ===")
+    for bad in ("quant", "context", "market"):
+        spy = _Spy().install()
+        spy.fail[bad] = C.CouncilSDKError(f"{bad} exploded")
+        try:
+            try:
+                asyncio.run(C.predict_async(CTX))
+                print(f"  FAIL {bad} failure not raised"); globals()['FAIL'] = FAIL + 1
+            except C.CouncilSDKError as e:
+                msg = str(e)
+                ok = (bad in msg and "Chairman was NOT run" in msg
+                      and "chairman" not in spy.names("start"))
+                print(f"  {'ok  ' if ok else 'FAIL'} {bad} failure: names the seat, "
+                      f"chairman skipped")
+                globals()['PASS' if ok else 'FAIL'] = globals()['PASS' if ok else 'FAIL'] + 1
+                if bad == "market":
+                    print(f"       message: {msg[:110]}...")
+        finally:
+            spy.restore()
+
+    spy = _Spy().install()
+    spy.fail["quant"] = RuntimeError("boom")
+    try:
+        try:
+            asyncio.run(C.predict_async(CTX))
+        except C.CouncilSDKError as e:
+            check("original error preserved as __cause__",
+                  lambda: _assert(isinstance(e.__cause__, RuntimeError)))
+            check("no averaging / no substitution mentioned",
+                  lambda: _assert("no substitute was used" in str(e)))
+    finally:
+        spy.restore()
+
+    print("\n=== ORCHESTRATION: chairman failure propagates ===")
+    spy = _Spy().install()
+    spy.fail["chairman"] = RuntimeError("chair exploded")
+    try:
+        try:
+            asyncio.run(C.predict_async(CTX))
+            check("chairman failure raised", lambda: _assert(False))
+        except C.CouncilSDKError as e:
+            check("chairman failure is a CouncilSDKError", lambda: _assert(True))
+            check("names the chairman", lambda: _assert("Chairman failed" in str(e)))
+            check("cause preserved", lambda: _assert(isinstance(e.__cause__, RuntimeError)))
+            check("all three specialists still ran first",
+                  lambda: _assert(len(spy.names("end")) >= 3))
+    finally:
+        spy.restore()
+
+    print("\n=== ORCHESTRATION: no retries, no writes ===")
+    spy = _Spy().install()
+    spy.fail["context"] = C.CouncilSDKError("once")
+    try:
+        try:
+            asyncio.run(C.predict_async(CTX))
+        except C.CouncilSDKError:
+            pass
+        check("failing seat was attempted exactly ONCE (no silent retry)",
+              lambda: _assert(spy.names("start").count("context") == 1))
+    finally:
+        spy.restore()
+
+    spy = _Spy().install()
+    before = set(os.listdir(os.path.dirname(os.path.abspath(__file__))))
+    try:
+        asyncio.run(C.predict_async(CTX))
+        after = set(os.listdir(os.path.dirname(os.path.abspath(__file__))))
+        check("predict() created NO files", lambda: _assert(before == after))
+        check("no council_ledger.csv written", lambda: _assert(
+            not os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                            "council_ledger.csv"))))
+    finally:
+        spy.restore()
+
+    print("\n=== ORCHESTRATION: sync wrapper ===")
+    spy = _Spy().install()
+    try:
+        r = C.predict(CTX)
+        check("predict() returns a CouncilPrediction",
+              lambda: _assert(isinstance(r, C.CouncilPrediction)))
+        check("predict() refuses a running loop",
+              lambda: asyncio.run(_predict_from_loop(CTX)), C.CouncilSDKError)
+    finally:
+        spy.restore()
+
+
+async def _predict_from_loop(ctx):
+    return C.predict(ctx)
 
 
 def _no_hardcoded_model():
