@@ -25,8 +25,22 @@ measured at all, so the Council stays outside the blend until its own ledger say
 
 STATUS: skeleton. `predict()` raises NotImplementedError - see the note there.
 """
-from dataclasses import dataclass, field
-from typing import List, Optional
+import asyncio
+import json
+import os
+import re
+from dataclasses import dataclass, field, replace
+from typing import Any, Dict, List, Optional
+
+from claude_agent_sdk import (
+    AgentDefinition,
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKError,
+    ResultMessage,
+    TextBlock,
+    query,
+)
 
 # Outcome labels. These are the Council's own vocabulary; the existing ledger uses the
 # single letters "H"/"D"/"A" and the two are mapped at the ledger boundary, not here.
@@ -265,3 +279,321 @@ def predict(context: MatchContext) -> CouncilPrediction:
         "contract (MatchContext, AnalystPrediction, CouncilPrediction) and its validation; "
         "the Claude Agent SDK panel that fills it in is a later step. Nothing calls this "
         "function yet - it is deliberately not wired into build_dashboard.py.")
+
+
+# ===========================================================================================
+# THE QUANT ANALYST — the first runtime Council member.
+#
+# One panel seat, deliberately narrow: it sees NUMBERS ONLY. No team news, no tactics, no
+# recollection of who Arsenal signed. That restriction is the point - a panel is only worth
+# more than one opinion if its members are actually looking at different things, and the
+# cheapest way to lose that is to let every seat fall back on the same diffuse football
+# knowledge. The Context Analyst (news, absences) and the Market Skeptic (prices) are separate
+# seats precisely so this one cannot quietly do their jobs badly.
+#
+# It is also the seat most at risk of hallucinated authority: asked about a fixture, a model
+# will happily produce an injury list. So the prompt forbids it, the tool list is empty, and
+# the context handed over contains only quantitative fields.
+# ===========================================================================================
+
+# The JSON contract says confidence is "low"/"medium"/"high"; AnalystPrediction requires a
+# probability. Both are deliberate - a categorical label is what a language model reports
+# reliably, a number is what a ledger can score - so they are mapped HERE, explicitly, at the
+# boundary. An unrecognised label raises rather than defaulting to something plausible: a
+# silent fallback would put an invented confidence into the evidence log.
+CONFIDENCE_LEVELS = {"low": 0.25, "medium": 0.55, "high": 0.85}
+
+
+class CouncilSDKError(RuntimeError):
+    """The Agent SDK failed to produce a usable response. Always raised `from` the cause."""
+
+
+class CouncilParseError(CouncilSDKError):
+    """Claude replied, but not with the JSON object the contract requires."""
+
+
+# Which model the panel runs on is a deployment decision, not a property of the seat, so it is
+# NOT baked into the AgentDefinition. A pinned model would also be a quiet cost decision: the
+# Council will eventually be four seats across ten fixtures every refresh, and that multiplies.
+#
+# Resolved at CALL time rather than import time - a module-level lookup would freeze whatever
+# the environment happened to be when council.py was first imported, which is exactly the kind
+# of thing that makes a test pass and production behave differently.
+COUNCIL_MODEL_ENV = "AI_COUNCIL_MODEL"
+
+
+def council_model():
+    """The model every Council seat should use, or None to accept the SDK's own default.
+
+    An empty or whitespace-only value counts as unset: `AI_COUNCIL_MODEL=` in a shell profile
+    should mean "I have not chosen one", not "use a model named empty string".
+    """
+    return (os.environ.get(COUNCIL_MODEL_ENV) or "").strip() or None
+
+
+QUANT_ANALYST_NAME = "quant"
+
+QUANT_SYSTEM_PROMPT = """\
+You are a Premier League quantitative forecasting analyst.
+
+You may ONLY use quantitative information supplied in MatchContext.
+
+Focus on:
+- existing model H/D/A probabilities
+- expected goals
+- home advantage if supplied
+- recent quantitative form if supplied
+- other numerical team-strength information explicitly present
+
+You must NOT:
+- invent injuries
+- invent tactical information
+- invent team news
+- browse the web
+- rely on general football knowledge not contained in the input
+
+If information is missing, state that explicitly.
+
+Return a calibrated Home/Draw/Away probability vector.
+
+OUTPUT CONTRACT
+Reply with a single JSON object and nothing else - no prose before or after, no markdown
+fence. Exactly these fields:
+
+{
+  "analyst_name": "quant",
+  "home_probability": float,
+  "draw_probability": float,
+  "away_probability": float,
+  "predicted_outcome": "HOME" | "DRAW" | "AWAY",
+  "confidence": "low" | "medium" | "high",
+  "evidence": [string, ...],
+  "uncertainties": [string, ...]
+}
+
+Rules for those fields:
+- the three probabilities are decimals in [0, 1] and must sum to 1.00
+- predicted_outcome is upper-case and is one of HOME, DRAW, AWAY
+- every entry in "evidence" must cite a number that appears in the context you were given
+- every context field listed as missing belongs in "uncertainties"
+- do not round a probability to 0 or 1; a football match is never certain
+"""
+
+# The canonical definition of this panel seat. Its `prompt` is the single source of truth for
+# the system prompt below, so the two can never drift apart. Registering it as an
+# AgentDefinition is what lets a future Chairman DELEGATE to this seat; for a single analyst
+# we drive it directly, which costs one turn instead of two.
+QUANT_ANALYST = AgentDefinition(
+    description=(
+        "Quantitative Premier League forecaster. Reads only the numbers in MatchContext - "
+        "model probabilities, expected goals, form ratings - and is forbidden from using team "
+        "news, tactics, or outside football knowledge."
+    ),
+    prompt=QUANT_SYSTEM_PROMPT,
+    tools=[],                       # no tools at all: this seat reads numbers and returns JSON
+    model=None,                     # resolved per call - see council_model()
+)
+
+# Belt and braces. `tools=[]` on the definition and `allowed_tools=[]` on the options should
+# already mean nothing is callable; naming the tools that could reach outside the context
+# makes the intent explicit and survives a future change to either default.
+FORBIDDEN_TOOLS = ["WebSearch", "WebFetch", "Bash", "Read", "Write", "Edit",
+                   "Glob", "Grep", "NotebookEdit", "Task"]
+
+
+def serialize_quant_context(context: MatchContext) -> str:
+    """The quantitative half of a MatchContext, as text for the prompt.
+
+    News fields are NOT included - not merely unused, absent. An analyst told to ignore team
+    news while being shown it is being asked to prove a negative; leaving it out of the
+    payload makes the restriction structural instead of aspirational.
+
+    Fields the desk does not have are listed as missing rather than omitted, so the analyst
+    can put them in `uncertainties` instead of quietly assuming a value.
+    """
+    if not isinstance(context, MatchContext):
+        raise CouncilValidationError(
+            f"expected MatchContext, got {type(context).__name__}")
+
+    L = [f"FIXTURE: {context.home_team} (home) v {context.away_team} (away)"]
+    if context.kickoff:
+        L.append(f"KICKOFF: {context.kickoff}")
+
+    L.append("\nEXISTING MODEL (Dixon-Coles blended with recent-form supremacy):")
+    if context.has_model():
+        L.append(f"  P(home) {context.model_home:.4f}   "
+                 f"P(draw) {context.model_draw:.4f}   P(away) {context.model_away:.4f}")
+    else:
+        L.append("  MISSING - no model probabilities supplied")
+
+    L.append("\nEXPECTED GOALS:")
+    if context.expected_home_goals is not None or context.expected_away_goals is not None:
+        h = ("?" if context.expected_home_goals is None
+             else f"{context.expected_home_goals:.2f}")
+        a = ("?" if context.expected_away_goals is None
+             else f"{context.expected_away_goals:.2f}")
+        L.append(f"  home {h}   away {a}")
+    else:
+        L.append("  MISSING - no expected goals supplied")
+
+    L.append("\nRECENT FORM (goal-supremacy rating; positive favours that side):")
+    if context.home_form is not None or context.away_form is not None:
+        h = "?" if context.home_form is None else f"{context.home_form:+.3f}"
+        a = "?" if context.away_form is None else f"{context.away_form:+.3f}"
+        L.append(f"  {context.home_team} {h}   {context.away_team} {a}")
+    else:
+        L.append("  MISSING - no form ratings supplied")
+
+    gaps = [g for g in context.missing() if g != "news"]
+    L.append("\nMISSING FROM THIS CONTEXT: " + (", ".join(gaps) if gaps else "nothing"))
+    L.append("Market and exchange prices are deliberately withheld from this seat - another "
+             "analyst covers them. Do not guess at them.")
+    return "\n".join(L)
+
+
+def _extract_json(text: str) -> Dict[str, Any]:
+    """Parse the one JSON object the contract asks for.
+
+    A ```json fence is stripped if present. That is parsing, not repair: the fence is a
+    transport artifact around an otherwise conforming object. Nothing inside the object is
+    touched - a malformed or incomplete body raises, and the caller sees it.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise CouncilParseError("the analyst returned no text at all")
+    body = text.strip()
+    fence = re.search(r"```(?:json)?\s*(.*?)```", body, re.DOTALL)
+    if fence:
+        body = fence.group(1).strip()
+    if not body.startswith("{"):
+        start, end = body.find("{"), body.rfind("}")
+        if start == -1 or end <= start:
+            raise CouncilParseError(
+                f"no JSON object in the analyst's reply; got: {text.strip()[:200]!r}")
+        body = body[start:end + 1]
+    try:
+        obj = json.loads(body)
+    except json.JSONDecodeError as e:
+        raise CouncilParseError(
+            f"the analyst's reply is not valid JSON ({e}); got: {body[:200]!r}") from e
+    if not isinstance(obj, dict):
+        raise CouncilParseError(
+            f"expected a JSON object, got {type(obj).__name__}: {body[:200]!r}")
+    return obj
+
+
+def analyst_from_payload(obj: Dict[str, Any], name: str = QUANT_ANALYST_NAME
+                         ) -> AnalystPrediction:
+    """Turn a parsed contract object into a validated AnalystPrediction.
+
+    Deliberately does NOT normalise: a probability vector that fails the simplex check raises
+    CouncilValidationError from AnalystPrediction's own __post_init__ and the caller sees
+    exactly what the model said. Rescaling a bad vector to sum to 1 would hide the one signal
+    that says this answer should not be trusted.
+    """
+    missing = [k for k in ("home_probability", "draw_probability", "away_probability",
+                           "predicted_outcome", "confidence") if k not in obj]
+    if missing:
+        raise CouncilParseError(
+            f"analyst payload is missing required field(s): {', '.join(missing)}")
+
+    raw_conf = obj["confidence"]
+    if isinstance(raw_conf, str):
+        key = raw_conf.strip().lower()
+        if key not in CONFIDENCE_LEVELS:
+            raise CouncilParseError(
+                f"confidence must be one of {sorted(CONFIDENCE_LEVELS)}, got {raw_conf!r}")
+        conf = CONFIDENCE_LEVELS[key]
+    else:
+        conf = raw_conf            # a number goes straight to check_probability, which judges it
+
+    def _listify(key):
+        v = obj.get(key) or []
+        if isinstance(v, str):
+            v = [v]
+        if not isinstance(v, list):
+            raise CouncilParseError(f"{key} must be a list of strings, got {type(v).__name__}")
+        return [str(x) for x in v]
+
+    # AnalystPrediction.__post_init__ validates; any failure propagates unchanged.
+    return AnalystPrediction(
+        analyst_name=str(obj.get("analyst_name") or name),
+        home_probability=obj["home_probability"],
+        draw_probability=obj["draw_probability"],
+        away_probability=obj["away_probability"],
+        predicted_outcome=obj["predicted_outcome"],
+        confidence=conf,
+        evidence=_listify("evidence"),
+        uncertainties=_listify("uncertainties"),
+    )
+
+
+def quant_options(model: Optional[str] = None) -> ClaudeAgentOptions:
+    """Locked-down options for this seat. Separated so a test can assert on them without
+    running anything.
+
+    `model` falls back to AI_COUNCIL_MODEL, and then to None - which hands the choice to the
+    Agent SDK's own default rather than this file guessing one.
+    """
+    chosen = model or council_model()
+    return ClaudeAgentOptions(
+        model=chosen,
+        system_prompt=QUANT_ANALYST.prompt,   # single source of truth - see QUANT_ANALYST
+        allowed_tools=[],                     # nothing callable
+        disallowed_tools=list(FORBIDDEN_TOOLS),
+        permission_mode="default",            # never bypassPermissions for a panel seat
+        max_turns=1,                          # one question, one JSON answer
+        setting_sources=[],                   # ignore user/project settings - no tool leakage
+        # the registered seat runs on the same model the query does
+        agents={QUANT_ANALYST_NAME: replace(QUANT_ANALYST, model=chosen)},
+    )
+
+
+async def run_quant_analyst_async(context: MatchContext) -> AnalystPrediction:
+    """Ask the Quant Analyst about one fixture.
+
+    Makes a real Claude request via the Agent SDK, which spawns the bundled Claude Code CLI as
+    a subprocess. Errors are wrapped in CouncilSDKError with the fixture attached, because a
+    bare transport failure three layers down says nothing about which match it was.
+    """
+    prompt = serialize_quant_context(context)
+    options = quant_options()
+
+    chunks: List[str] = []
+    result: Optional[ResultMessage] = None
+    try:
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        chunks.append(block.text)
+            elif isinstance(message, ResultMessage):
+                result = message
+    except ClaudeSDKError as e:
+        raise CouncilSDKError(
+            f"Agent SDK failed for {context.fixture_key()}: {e}") from e
+
+    if result is not None and getattr(result, "is_error", False):
+        raise CouncilSDKError(
+            f"the Quant Analyst errored on {context.fixture_key()}: "
+            f"{getattr(result, 'result', None) or 'no detail returned'}")
+    if not chunks:
+        raise CouncilParseError(
+            f"the Quant Analyst returned no text for {context.fixture_key()}")
+
+    return analyst_from_payload(_extract_json("\n".join(chunks)))
+
+
+def run_quant_analyst(context: MatchContext) -> AnalystPrediction:
+    """Synchronous entry point - owns the asyncio boundary so every caller stays synchronous.
+
+    build_dashboard.py and the rest of the pipeline are synchronous top to bottom, and the
+    Agent SDK's query() is an async generator. That boundary lives HERE, once, rather than
+    turning the desk async to accommodate one experimental layer.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(run_quant_analyst_async(context))
+    raise CouncilSDKError(
+        "run_quant_analyst() was called from inside a running event loop; "
+        "await run_quant_analyst_async(context) instead")
