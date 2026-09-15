@@ -58,17 +58,48 @@ RIDGE = 8.0              # L2 shrink on attack/defense (stabilises promoted/low-
 # RPS 0.2056 / LL 0.9888 vs the old span4+ridge2 (0.2061 / 0.9904).
 
 COLS = ["date", "home_team", "away_team", "home_score", "away_score"]
+# Shots are OPTIONAL extras: kept when the source has them, ignored when it does not, so a
+# results file without them still loads. Until SHOT_BLEND > 0 they change nothing.
+SHOT_COLS = ["home_shots", "away_shots"]
+
+# RULE 37: blend shot-implied goals into the Poisson target.
+#
+# The model saw five columns - date, two teams, two scores - and threw away the shots,
+# corners, cards and half-time scores sitting in the same file. Measured on 19,240 team-match
+# observations, a team's SHOT difference predicts their next match's goal difference better
+# than their GOAL difference does, at every window tested:
+#
+#     last 1 match    shots +0.1195   goals +0.0959
+#     last 3 matches  shots +0.2089   goals +0.1747
+#     last 5 matches  shots +0.2374   goals +0.2104
+#
+# and over a season, after 4 games, shot difference predicts rest-of-season points at r=0.618
+# against goal difference's 0.553 (520 team-seasons, bootstrap 95% CI on the gap
+# [+0.003, +0.127]).
+#
+# The blend is on the POISSON TARGET, not on the ratings: ll = x*log(lam) - lam has no
+# factorial, so a non-integer x is a valid Poisson kernel. The Dixon-Coles tau correction
+# still uses the REAL integer scores, because it is a correction to specific low-score cells
+# and those cells are defined by what actually happened.
+#
+#     x_eff = (1 - SHOT_BLEND) * goals + SHOT_BLEND * shots * k
+#
+# where k = (total goals) / (total shots) over the fit window, so the blended target has the
+# same mean as goals and only its DISTRIBUTION ACROSS TEAMS changes. 0.0 reproduces the old
+# model exactly. Set from the walk-forward sweep in sweep_shotblend.py.
+SHOT_BLEND = 0.0
 
 
 def load_matches(cutoff=None, extra=None):
     df = pd.read_csv(DATA)
-    df = df[df.home_score.notna() & df.away_score.notna()][COLS].copy()
+    keep = COLS + [c for c in SHOT_COLS if c in df.columns]
+    df = df[df.home_score.notna() & df.away_score.notna()][keep].copy()
     df["date"] = pd.to_datetime(df.date)
     # RULE 1 (refit after each matchday): fold in freshly-finished results (e.g. the current
     # season's played games, from the live feed) so ratings update as the season unfolds.
     # De-duplicated against the CSV by (date, teams) so re-runs never double-count.
     if extra is not None and len(extra):
-        extra = extra[COLS].copy()
+        extra = extra[[c for c in keep if c in extra.columns]].copy()
         extra["date"] = pd.to_datetime(extra["date"])
         have = {(d, frozenset((h, a))) for d, h, a in zip(df.date, df.home_team, df.away_team)}
         keep = [(r.date, frozenset((r.home_team, r.away_team))) not in have
@@ -101,6 +132,24 @@ def fit(cutoff=None, maxiter=500, verbose=True, extra=None):
     w = time_weights(df.date, cutoff)
     w = w / w.mean()
 
+    # RULE 37: the Poisson target may blend in shot-implied goals. The tau correction below
+    # keeps the integer scores - it corrects specific 0-0/1-0/0-1/1-1 cells, and those are
+    # defined by the real result, not by a blend.
+    xt, yt = x.astype(float), y.astype(float)
+    shots_used = 0
+    if SHOT_BLEND > 0 and {"home_shots", "away_shots"} <= set(df.columns):
+        hs = pd.to_numeric(df.home_shots, errors="coerce").values
+        as_ = pd.to_numeric(df.away_shots, errors="coerce").values
+        ok = np.isfinite(hs) & np.isfinite(as_) & ((hs + as_) > 0)
+        if ok.sum():
+            # scale shots to goals so the blended target keeps the same mean; only the
+            # distribution across teams moves
+            k = (x[ok].sum() + y[ok].sum()) / (hs[ok].sum() + as_[ok].sum())
+            b = SHOT_BLEND
+            xt[ok] = (1 - b) * x[ok] + b * hs[ok] * k
+            yt[ok] = (1 - b) * y[ok] + b * as_[ok] * k
+            shots_used = int(ok.sum())
+
     # count each team's recency-weighted matches (for the report)
     wm = np.zeros(n)
     np.add.at(wm, hi, w); np.add.at(wm, ai, w)
@@ -115,7 +164,7 @@ def fit(cutoff=None, maxiter=500, verbose=True, extra=None):
         loglam = a[hi] - d[ai] + h
         logmu = a[ai] - d[hi]
         lam, mu = np.exp(loglam), np.exp(logmu)
-        ll = x * loglam - lam + y * logmu - mu
+        ll = xt * loglam - lam + yt * logmu - mu
         tau = np.ones_like(lam)
         tau[m00] = 1.0 - lam[m00] * mu[m00] * rho
         tau[m01] = 1.0 + lam[m01] * rho
@@ -130,6 +179,8 @@ def fit(cutoff=None, maxiter=500, verbose=True, extra=None):
     bounds = [(-3, 3)] * (2 * n) + [(-1.0, 1.0), (-0.2, 0.2)]
 
     if verbose:
+        if SHOT_BLEND > 0:
+            print(f"  shot blend {SHOT_BLEND:.2f} on {shots_used} matches with shot data")
         print(f"Fitting Dixon-Coles on {len(df)} PL matches "
               f"({df.date.min().date()}..{df.date.max().date()}), {n} teams...")
     res = minimize(nll, x0, method="L-BFGS-B", bounds=bounds,
@@ -143,6 +194,7 @@ def fit(cutoff=None, maxiter=500, verbose=True, extra=None):
                  cutoff=str(cutoff.date()), n_matches=int(len(df)),
                  window_years=WINDOW_YEARS, decay_base=DECAY_BASE,
                  decay_span=DECAY_SPAN, ridge=RIDGE,
+                 shot_blend=SHOT_BLEND, shot_rows=shots_used,
                  date_min=str(df.date.min().date()), date_max=str(df.date.max().date()))
     if verbose:
         print(f"  home_adv={model['home_adv']:.3f}  rho={model['rho']:.3f}  "
