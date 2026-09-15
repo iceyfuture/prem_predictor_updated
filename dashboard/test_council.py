@@ -70,6 +70,37 @@ NO_NEWS = C.MatchContext(
     expected_home_goals=1.66, expected_away_goals=1.55,
     home_form=+3.0, away_form=+1.0, home_news=[], away_news=[])
 
+# the Market seat's three cases: both sources, one source, neither
+BOTH_MKT = C.MatchContext(
+    "Brentford", "Chelsea", kickoff="Fri 18 Sep 19:00",
+    model_home=.60, model_draw=.23, model_away=.17,
+    market_home=.50, market_draw=.27, market_away=.23,
+    kalshi_home=.505, kalshi_draw=.265, kalshi_away=.23,
+    expected_home_goals=1.66, expected_away_goals=1.55,
+    home_form=+3.0, away_form=+1.0,
+    home_news=["Starting goalkeeper confirmed unavailable"],
+    away_news=["Key midfielder a doubt"])
+BOOK_ONLY = C.MatchContext(
+    "Brentford", "Chelsea", model_home=.42, model_draw=.26, model_away=.32,
+    market_home=.3354, market_draw=.2472, market_away=.4174)
+VIG_MKT = C.MatchContext(
+    "Brentford", "Chelsea", model_home=.42, model_draw=.26, model_away=.32,
+    market_home=.36, market_draw=.27, market_away=.44)          # sums to 1.07
+NO_MKT = C.MatchContext(
+    "Brentford", "Chelsea", model_home=.42, model_draw=.26, model_away=.32,
+    expected_home_goals=1.66, home_form=+3.0, home_news=["something"])
+
+MARKET_GOOD = """{
+  "analyst_name": "market",
+  "home_probability": 0.54,
+  "draw_probability": 0.25,
+  "away_probability": 0.21,
+  "predicted_outcome": "HOME",
+  "confidence": "medium",
+  "evidence": ["model is +10.0 pts above the book on HOME"],
+  "uncertainties": ["no exchange price supplied"]
+}"""
+
 CONTEXT_GOOD = """{
   "analyst_name": "context",
   "home_probability": 0.36,
@@ -248,6 +279,104 @@ def main():
          C.quant_options().max_turns, C.quant_options().permission_mode,
          list(C.quant_options().setting_sources))))
 
+    print("\n=== MARKET SKEPTIC: exists and is a distinct seat ===")
+    check("MARKET_SKEPTIC defined",
+          lambda: _assert(isinstance(C.MARKET_SKEPTIC, type(C.QUANT_ANALYST))))
+    check("its name is 'market'", lambda: _assert(C.MARKET_SKEPTIC_NAME == "market"))
+    check("prompt differs from both other seats",
+          lambda: _assert(C.MARKET_SKEPTIC.prompt not in
+                          (C.QUANT_ANALYST.prompt, C.CONTEXT_ANALYST.prompt)))
+    check("no tools on the definition", lambda: _assert(C.MARKET_SKEPTIC.tools == []))
+    check("prompt forbids inventing explanations",
+          lambda: _assert("invent explanations for why the market differs"
+                          in C.MARKET_SKEPTIC.prompt))
+    check("prompt forbids using team news",
+          lambda: _assert("use team news" in C.MARKET_SKEPTIC.prompt))
+    check("prompt says do not just copy the market",
+          lambda: _assert("not here to repeat the market" in C.MARKET_SKEPTIC.prompt))
+    # the prompt wraps this instruction across a line break, so match the contiguous fragment
+    check("prompt says do not average the two sources",
+          lambda: _assert("simply average the two" in C.MARKET_SKEPTIC.prompt))
+    check("async + sync entry points exist",
+          lambda: _assert(asyncio.iscoroutinefunction(C.run_market_skeptic_async)
+                          and callable(C.run_market_skeptic)))
+
+    print("\n=== MARKET SKEPTIC: what it is shown ===")
+    mk = C.serialize_market_context(BOTH_MKT)
+    check("teams present", lambda: _assert("Brentford (home) v Chelsea" in mk))
+    check("model probabilities present", lambda: _assert("0.6000" in mk and "0.2300" in mk))
+    check("bookmaker probabilities present", lambda: _assert("0.5000" in mk))
+    check("kalshi probabilities present", lambda: _assert("0.5050" in mk))
+    check("EXCLUDES expected goals", lambda: _assert("1.66" not in mk and "1.55" not in mk))
+    check("EXCLUDES form ratings", lambda: _assert("+3.000" not in mk))
+    check("EXCLUDES team news", lambda: _assert("goalkeeper" not in mk.lower()))
+    check("EXCLUDES injuries/context", lambda: _assert("doubt" not in mk.lower()))
+    check("says what is withheld", lambda: _assert("WITHHELD FROM THIS SEAT" in mk))
+    check("quantifies disagreement vs book",
+          lambda: _assert("+10.0 pts" in mk))
+    check("quantifies disagreement vs exchange", lambda: _assert("vs exchange:" in mk))
+    check("compares the two sources to each other",
+          lambda: _assert("bookmaker vs exchange" in mk))
+    check("rejects a non-MatchContext", lambda: C.serialize_market_context("x"),
+          C.CouncilValidationError)
+
+    print("\n=== MARKET SKEPTIC: missing sources are explicit ===")
+    b = C.serialize_market_context(BOOK_ONLY)
+    check("book present when only book supplied", lambda: _assert("0.3354" in b))
+    check("missing kalshi stated", lambda: _assert("NOT SUPPLIED" in b and "Kalshi lists EPL" in b))
+    check("missing sources listed", lambda: _assert("MARKET SOURCES NOT SUPPLIED: kalshi" in b))
+    check("no source-vs-source line with one source",
+          lambda: _assert("bookmaker vs exchange" not in b))
+    n = C.serialize_market_context(NO_MKT)
+    check("both sources reported missing",
+          lambda: _assert(n.count("NOT SUPPLIED") >= 2))
+    check("baseline still shown with no market", lambda: _assert("0.4200" in n))
+    check("no disagreement block without a market",
+          lambda: _assert("DISAGREEMENT" not in n))
+    check("no-market payload still hides xG/form/news",
+          lambda: _assert("1.66" not in n and "+3.000" not in n and "something" not in n))
+
+    print("\n=== MARKET SKEPTIC: overround is surfaced ===")
+    v = C.serialize_market_context(VIG_MKT)
+    check("flags un-normalised book prices", lambda: _assert("overround" in v))
+    check("reports the sum", lambda: _assert("sum to 1.0700" in v))
+    check("normalised book is labelled so",
+          lambda: _assert("already normalised" in C.serialize_market_context(BOOK_ONLY)))
+
+    print("\n=== MARKET SKEPTIC: parsing and validation (shared) ===")
+    mp = C.analyst_from_payload(C._extract_json(MARKET_GOOD), C.MARKET_SKEPTIC_NAME)
+    check("valid payload parses", lambda: _assert(mp.analyst_name == "market"))
+    check("probabilities carried", lambda: _assert(mp.probabilities() == (.54, .25, .21)))
+    check("confidence mapped", lambda: _assert(mp.confidence == 0.55))
+    check("malformed JSON raises",
+          lambda: C.analyst_from_payload(C._extract_json("the market knows best"), "market"),
+          C.CouncilParseError)
+    check("bad simplex raises",
+          lambda: C.analyst_from_payload({**C._extract_json(MARKET_GOOD),
+                                          "away_probability": .9}, "market"),
+          C.CouncilValidationError)
+    check("bad outcome raises",
+          lambda: C.analyst_from_payload({**C._extract_json(MARKET_GOOD),
+                                          "predicted_outcome": "H"}, "market"),
+          C.CouncilValidationError)
+
+    print("\n=== MARKET SKEPTIC: lockdown matches the other seats ===")
+    mo = C.market_options()
+    check("no tools allowed", lambda: _assert(list(mo.allowed_tools) == []))
+    check("web tools denied", lambda: _assert({"WebSearch", "WebFetch"} <= set(mo.disallowed_tools)))
+    check("max_turns is 1", lambda: _assert(mo.max_turns == 1))
+    check("permissions not bypassed", lambda: _assert(mo.permission_mode != "bypassPermissions"))
+    check("external settings ignored", lambda: _assert(list(mo.setting_sources) == []))
+    check("system prompt is the definition's",
+          lambda: _assert(mo.system_prompt == C.MARKET_SKEPTIC.prompt))
+    check("all three seats share one lockdown", lambda: _assert(
+        len({(tuple(o.allowed_tools), tuple(o.disallowed_tools), o.max_turns,
+              o.permission_mode, tuple(o.setting_sources))
+             for o in (C.quant_options(), C.context_options(), C.market_options())}) == 1))
+    check("three distinct seats registered", lambda: _assert(
+        {list(C.quant_options().agents)[0], list(C.context_options().agents)[0],
+         list(C.market_options().agents)[0]} == {"quant", "context", "market"}))
+
     print("\n=== model is configurable, not hard-coded (no network) ===")
     saved = os.environ.get(C.COUNCIL_MODEL_ENV)
     try:
@@ -276,6 +405,12 @@ def main():
               lambda: _assert(C.context_options().agents["context"].model == "claude-haiku-4-5"))
         check("context AgentDefinition pins no model",
               lambda: _assert(C.CONTEXT_ANALYST.model is None))
+        check("market seat honours the env var",
+              lambda: _assert(C.market_options().model == "claude-haiku-4-5"))
+        check("market seat's subagent honours it",
+              lambda: _assert(C.market_options().agents["market"].model == "claude-haiku-4-5"))
+        check("market AgentDefinition pins no model",
+              lambda: _assert(C.MARKET_SKEPTIC.model is None))
 
         os.environ[C.COUNCIL_MODEL_ENV] = "   "
         check("blank env var counts as unset",

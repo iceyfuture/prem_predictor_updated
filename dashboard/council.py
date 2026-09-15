@@ -815,3 +815,226 @@ async def run_context_analyst_async(context: MatchContext) -> AnalystPrediction:
 def run_context_analyst(context: MatchContext) -> AnalystPrediction:
     """Synchronous entry point for the Context Analyst."""
     return _sync(run_context_analyst_async(context), CONTEXT_ANALYST_NAME)
+
+
+# ===========================================================================================
+# THE MARKET SKEPTIC — the third panel seat.
+#
+# This seat exists because of a finding this project has now reproduced four times: the model
+# does NOT beat the closing line. Blending it toward the market improved the score at every
+# weight over 1,893 matches, all the way to 100% market. Every apparent edge collapsed once
+# its two luckiest tickets were removed. So a panel that only ever asks "what do our numbers
+# say?" is missing the one voice that has consistently been right.
+#
+# But it is a SKEPTIC, not a mirror. Copying the market is worthless - the desk already has
+# the market. Its job is to say how far the model has wandered, and whether anything in front
+# of it justifies the distance. It sees no expected goals, no form, no team news: those are
+# other seats' evidence, and "the market disagrees because of an injury" is exactly the kind
+# of invented explanation the role forbids.
+#
+# One trap this seat must not fall into: bookmaker implied probabilities usually carry
+# overround and sum to MORE than 1. Treating them as probabilities without noticing is a
+# calibration error, so the payload states the sum and lets the analyst judge.
+# ===========================================================================================
+
+MARKET_SKEPTIC_NAME = "market"
+
+MARKET_SYSTEM_PROMPT = """\
+You are a skeptical Premier League forecasting and calibration analyst.
+
+Your job is to compare the existing model forecast against supplied market probabilities.
+
+The market is not automatically correct, but a large disagreement requires strong evidence.
+
+Focus on:
+- model Home/Draw/Away probabilities
+- bookmaker implied probabilities when supplied
+- Kalshi/exchange probabilities when supplied
+- size and direction of disagreement
+- calibration and uncertainty
+
+You must NOT:
+- browse the web
+- use team news
+- use injuries
+- use expected goals
+- use form ratings
+- use general Premier League knowledge
+- invent explanations for why the market differs
+
+If the market and model disagree, quantify the disagreement.
+If there is no supplied evidence explaining the disagreement, be skeptical of large departures
+from the market.
+
+HOW TO FORM YOUR ANSWER
+You are not here to repeat the market. The desk already has the market price; a seat that
+copies it adds nothing. You are also not here to defend the model. Your output is a calibrated
+third number, and you must justify where it sits using only the figures in front of you.
+
+- State the disagreement in percentage points, per outcome, before you adjust anything.
+- Landing between the model and the market is usually reasonable. Say WHY your answer sits
+  where it does between them - closer to the market when the gap is large and unexplained,
+  closer to the model when the gap is small or the market sources disagree with each other.
+- You have NO information about why the market differs. Do not speculate about injuries, form,
+  team news, or anything else you were not given. "The gap is unexplained by anything I can
+  see" is the correct and complete observation.
+- If bookmaker and exchange prices are BOTH supplied, compare them to each other first. Broad
+  agreement between two independent sources makes a large model departure harder to justify.
+  Disagreement between them is itself a reason for caution - put it in uncertainties. Do not
+  simply average the two.
+- If NO market prices were supplied, return the baseline model probabilities essentially
+  unchanged, set confidence to "low", and state plainly that there is insufficient market
+  evidence to challenge the baseline. That is the correct answer, not a failure.
+- Bookmaker implied probabilities may include overround and sum to more than 1. If the payload
+  says they do, note it - an un-normalised price is not a probability.
+
+OUTPUT CONTRACT
+Reply with a single JSON object and nothing else - no prose before or after, no markdown
+fence. Exactly these fields:
+
+{
+  "analyst_name": "market",
+  "home_probability": float,
+  "draw_probability": float,
+  "away_probability": float,
+  "predicted_outcome": "HOME" | "DRAW" | "AWAY",
+  "confidence": "low" | "medium" | "high",
+  "evidence": [string, ...],
+  "uncertainties": [string, ...]
+}
+
+Rules for those fields:
+- the three probabilities are decimals in [0, 1] and must sum to 1.00
+- predicted_outcome is upper-case and is one of HOME, DRAW, AWAY
+- every entry in "evidence" must cite a number that appears in the payload you were given, or
+  a difference computed from two of them
+- any market source that was not supplied belongs in "uncertainties"
+- do not round a probability to 0 or 1; a football match is never certain
+"""
+
+MARKET_SKEPTIC = AgentDefinition(
+    description=(
+        "Skeptical calibration analyst. Compares the existing model's probabilities against "
+        "supplied bookmaker and exchange prices, quantifies the disagreement, and resists "
+        "large unexplained departures from the market. Sees no expected goals, form, or team "
+        "news, and may not invent reasons for why the market differs."
+    ),
+    prompt=MARKET_SYSTEM_PROMPT,
+    tools=[],
+    model=None,                     # resolved per call - see council_model()
+)
+
+
+def _delta_line(label, model_p, other_p):
+    """One '+4.2 pts' row, or None when the other source is absent."""
+    if other_p is None or model_p is None:
+        return None
+    return f"    {label:<6} model {model_p:.4f}   source {other_p:.4f}   " \
+           f"model is {(model_p - other_p) * 100:+.1f} pts"
+
+
+def serialize_market_context(context: MatchContext) -> str:
+    """The market half of a MatchContext, as text for the prompt.
+
+    Expected goals, form ratings and team news are ABSENT - not merely unused. This seat's
+    whole value is that it CANNOT explain a price gap, so it has to report the gap honestly
+    instead of narrating a cause. Handing it an injury list would let it do exactly what its
+    prompt forbids.
+
+    Differences are pre-computed. That is arithmetic on numbers already in the payload, not
+    new evidence, and doing it here removes a class of error that would otherwise look like
+    an opinion.
+    """
+    if not isinstance(context, MatchContext):
+        raise CouncilValidationError(
+            f"expected MatchContext, got {type(context).__name__}")
+
+    L = [f"FIXTURE: {context.home_team} (home) v {context.away_team} (away)"]
+    if context.kickoff:
+        L.append(f"KICKOFF: {context.kickoff}")
+
+    L.append("\nEXISTING MODEL (the forecast you are asked to scrutinise):")
+    if context.has_model():
+        L.append(f"  P(home) {context.model_home:.4f}   "
+                 f"P(draw) {context.model_draw:.4f}   P(away) {context.model_away:.4f}")
+    else:
+        L.append("  MISSING - no model probabilities supplied. Say so; do not invent one.")
+
+    L.append("\nBOOKMAKER IMPLIED PROBABILITIES:")
+    if context.has_market():
+        tot = context.market_home + context.market_draw + context.market_away
+        L.append(f"  P(home) {context.market_home:.4f}   "
+                 f"P(draw) {context.market_draw:.4f}   P(away) {context.market_away:.4f}")
+        L.append(f"  these sum to {tot:.4f}"
+                 + (f" - they carry ~{(tot - 1) * 100:.1f}% overround and are NOT normalised "
+                    f"probabilities" if abs(tot - 1) > 0.005
+                    else " - already normalised"))
+    else:
+        L.append("  NOT SUPPLIED - books often open only about a week before kickoff.")
+
+    L.append("\nEXCHANGE (KALSHI) PROBABILITIES:")
+    if context.has_kalshi():
+        tot = context.kalshi_home + context.kalshi_draw + context.kalshi_away
+        L.append(f"  P(home) {context.kalshi_home:.4f}   "
+                 f"P(draw) {context.kalshi_draw:.4f}   P(away) {context.kalshi_away:.4f}")
+        L.append(f"  these sum to {tot:.4f}")
+    else:
+        L.append("  NOT SUPPLIED - Kalshi lists EPL only shortly before kickoff.")
+
+    if context.has_model() and (context.has_market() or context.has_kalshi()):
+        L.append("\nDISAGREEMENT (positive = the model is HIGHER than that source):")
+        if context.has_market():
+            L.append("  vs bookmaker:")
+            for lab, m, o in (("HOME", context.model_home, context.market_home),
+                              ("DRAW", context.model_draw, context.market_draw),
+                              ("AWAY", context.model_away, context.market_away)):
+                line = _delta_line(lab, m, o)
+                if line:
+                    L.append(line)
+        if context.has_kalshi():
+            L.append("  vs exchange:")
+            for lab, m, o in (("HOME", context.model_home, context.kalshi_home),
+                              ("DRAW", context.model_draw, context.kalshi_draw),
+                              ("AWAY", context.model_away, context.kalshi_away)):
+                line = _delta_line(lab, m, o)
+                if line:
+                    L.append(line)
+        if context.has_market() and context.has_kalshi():
+            spread = max(abs(context.market_home - context.kalshi_home),
+                         abs(context.market_draw - context.kalshi_draw),
+                         abs(context.market_away - context.kalshi_away))
+            L.append(f"  bookmaker vs exchange: largest gap between the two sources is "
+                     f"{spread * 100:.1f} pts")
+
+    gaps = [g for g in ("market", "kalshi") if g in context.missing()]
+    L.append("\nMARKET SOURCES NOT SUPPLIED: " + (", ".join(gaps) if gaps else "none"))
+    L.append("WITHHELD FROM THIS SEAT: expected goals, form ratings, team news, injuries. "
+             "Other analysts cover those. You cannot explain a price gap - report it.")
+    return "\n".join(L)
+
+
+def market_options(model: Optional[str] = None) -> ClaudeAgentOptions:
+    """Locked-down options for the Market seat - identical safeguards to the other seats."""
+    chosen = model or council_model()
+    return ClaudeAgentOptions(
+        model=chosen,
+        system_prompt=MARKET_SKEPTIC.prompt,
+        allowed_tools=[],
+        disallowed_tools=list(FORBIDDEN_TOOLS),
+        permission_mode="default",
+        max_turns=1,
+        setting_sources=[],
+        agents={MARKET_SKEPTIC_NAME: replace(MARKET_SKEPTIC, model=chosen)},
+    )
+
+
+async def run_market_skeptic_async(context: MatchContext) -> AnalystPrediction:
+    """Ask the Market Skeptic about one fixture. Prices only - see MARKET_SYSTEM_PROMPT."""
+    return await _ask_analyst_async(
+        serialize_market_context(context), market_options(),
+        context.fixture_key(), MARKET_SKEPTIC_NAME)
+
+
+def run_market_skeptic(context: MatchContext) -> AnalystPrediction:
+    """Synchronous entry point for the Market Skeptic."""
+    return _sync(run_market_skeptic_async(context), MARKET_SKEPTIC_NAME)
