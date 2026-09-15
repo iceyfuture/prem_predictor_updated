@@ -302,6 +302,35 @@
     #chatfab{right:12px;bottom:12px;padding:11px 15px}
     #chatfab span{display:none}
   }
+
+  /* ---------------- AI Council (experimental) ---------------- */
+  .council-wrap{display:flex;flex-direction:column;gap:12px}
+  .council-flow{font-size:12px;color:var(--muted);margin:0;padding:9px 11px;
+    border-left:3px solid var(--pl-purple);background:rgba(53,16,62,.045)}
+  .council-seats{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
+  .council-seat{border:1px solid var(--line);border-radius:var(--r);padding:11px 13px;
+    background:var(--panel);min-width:0}
+  .council-seat header{display:grid;grid-template-columns:auto 1fr auto;gap:9px;
+    align-items:start;margin-bottom:8px}
+  .council-seat header b{font-size:12.5px;display:block}
+  .council-seat header small{display:block;color:var(--muted);font-size:11px;margin-top:2px}
+  .council-seat .ci{font-size:17px;line-height:1.2}
+  .council-hda{font-family:var(--mono);font-size:11px;white-space:nowrap;color:var(--ink)}
+  .council-hda.big{font-size:14px;font-weight:700}
+  .council-list{margin-top:8px}
+  .council-list h5{margin:0 0 4px;font-size:9px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--faint);font-weight:800}
+  .council-list ul{margin:0;padding-left:16px}
+  .council-list li{font-size:11.5px;line-height:1.5;margin-bottom:3px;overflow-wrap:anywhere}
+  .council-list p{margin:0;font-size:12px;line-height:1.5}
+  .council-list.muted li{color:var(--muted)}
+  .council-arrow{text-align:center;font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--faint)}
+  .council-chair{border-color:var(--pl-purple);border-width:2px}
+  .council-total td{border-top:1px solid var(--line-2)}
+  @media(max-width:560px){.council-seats{grid-template-columns:1fr}
+    .council-seat header{grid-template-columns:auto 1fr}
+    .council-hda{grid-column:1/-1;margin-top:3px}}
 </style>
 <link rel="stylesheet" href="minimal.css">
 </head>
@@ -513,6 +542,114 @@ function predictionExplanation(m){
 function fallbackCrest(name,abbr,color){
   return `<span class="crest" style="background:${esc(color)}" role="img" aria-label="${esc(name)} crest fallback">${esc(abbr)}</span>`;
 }
+
+// ---------------- AI Council (experimental, display only) ----------------
+// Renders what council_ledger.csv and council_reasoning.jsonl already hold. It never
+// computes a probability and never touches m.ph/m.pd/m.pa - the Council is tracked on its
+// own ledger and has been graded zero times, so it must not look like part of the baseline.
+var CONSENSUS_BANDS = [[0.30,'Strong disagreement'],[0.60,'Meaningful disagreement'],
+                       [0.80,'Moderate agreement'],[1.01,'Strong agreement']];
+function consensusLabel(c){
+  if(c==null) return '\u2014';
+  for(var i=0;i<CONSENSUS_BANDS.length;i++){ if(c<=CONSENSUS_BANDS[i][0]) return CONSENSUS_BANDS[i][1]; }
+  return 'Strong agreement';
+}
+// stated confidence comes back as the 0-1 number the ledger stores; show the label it came from
+function confLabel(v){
+  if(v==null) return '\u2014';
+  return v<=0.35?'Low':(v<=0.70?'Medium':'High');
+}
+var pc = function(x){ return x==null?'\u2014':Math.round(x*100)+'%'; };
+
+function councilSummary(m){
+  var c=m.council; if(!c) return '';
+  return `${pc(c.home)} / ${pc(c.draw)} / ${pc(c.away)} \u00B7 consensus ${pc(c.consensus_score)}`;
+}
+
+function seatCard(icon,name,seat){
+  if(!seat) return '';
+  var ev=(seat.evidence||[]).map(function(e){return '<li>'+esc(e)+'</li>';}).join('');
+  var un=(seat.uncertainties||[]).map(function(u){return '<li>'+esc(u)+'</li>';}).join('');
+  return `<article class="council-seat">
+    <header><span class="ci" aria-hidden="true">${icon}</span>
+      <div><b>${esc(name)}</b>
+        <small>picks <b>${esc(seat.predicted_outcome||'\u2014')}</b> \u00B7 confidence ${confLabel(seat.confidence)}</small>
+      </div>
+      <span class="council-hda">${pc(seat.home)} / ${pc(seat.draw)} / ${pc(seat.away)}</span>
+    </header>
+    ${ev?`<div class="council-list"><h5>Evidence cited</h5><ul>${ev}</ul></div>`:''}
+    ${un?`<div class="council-list muted"><h5>Uncertainties raised</h5><ul>${un}</ul></div>`:''}
+  </article>`;
+}
+
+function councilDeltaRows(m){
+  var c=m.council;
+  var model=[m.ph/100,m.pd/100,m.pa/100], fin=[c.home,c.draw,c.away];
+  return ['HOME','DRAW','AWAY'].map(function(lab,i){
+    if(fin[i]==null) return '';
+    var d=Math.round(fin[i]*100)-Math.round(model[i]*100);
+    var cls=d>0?'pos':(d<0?'neg':'');
+    return `<tr><td>${lab}</td><td>${Math.round(model[i]*100)}%</td><td>\u2192</td>
+      <td>${Math.round(fin[i]*100)}%</td><td class="${cls}">${d>0?'+':''}${d} pts</td></tr>`;
+  }).join('');
+}
+
+function councilBody(m){
+  var c=m.council; if(!c) return '';
+  var r=m.council_reasoning;
+  var head=`<p class="panel-hint" style="color:var(--amber)"><b>Experimental AI Council</b>
+      &mdash; tracked separately from the statistical model. It does not affect the model
+      probabilities, edges, confidence tiers or any prop price on this page.
+      Locked ${esc(c.locked_at||'')}${c.late?' <b>after kickoff &mdash; not counted as a forward test</b>':''}.</p>`;
+
+  var finalCard=`<article class="council-seat council-chair">
+      <header><span class="ci" aria-hidden="true">\u2696\uFE0F</span>
+        <div><b>Chairman &mdash; final Council forecast</b>
+          <small>picks <b>${esc(c.predicted_outcome||'\u2014')}</b> \u00B7 confidence ${confLabel(c.confidence)}
+          \u00B7 consensus ${pc(c.consensus_score)} (${consensusLabel(c.consensus_score)})</small></div>
+        <span class="council-hda big">${pc(c.home)} / ${pc(c.draw)} / ${pc(c.away)}</span>
+      </header>
+      ${c.disagreement_note?`<div class="council-list"><h5>Main disagreement</h5>
+        <p>${esc(c.disagreement_note)}</p></div>`:''}
+    </article>`;
+
+  if(!r){
+    return head+`<div class="council-wrap">${finalCard}
+      <p class="panel-hint">Detailed Council reasoning was not retained for this forecast.
+      The final probabilities and consensus above are the complete stored record; the
+      specialists' evidence was not saved when this fixture was locked.</p>
+      <figure class="evidence-block"><p>What changed vs the model</p>
+      <table class="ktab"><tbody>${councilDeltaRows(m)}</tbody></table></figure></div>`;
+  }
+
+  var cmp=[['\uD83D\uDCCA Quant',r.quant],['\uD83D\uDCF0 Context',r.context],
+           ['\uD83D\uDCC8 Market',r.market]]
+    .filter(function(x){return x[1];})
+    .map(function(x){ var s=x[1];
+      return `<tr><td>${x[0]}</td><td>${pc(s.home)}</td><td>${pc(s.draw)}</td><td>${pc(s.away)}</td></tr>`;
+    }).join('');
+
+  return head+`<div class="council-wrap">
+    <p class="council-flow"><b>Three specialists analyse independently, then a chairman
+      synthesises them.</b> Each sees a different slice of the evidence &mdash; none sees all
+      of it, and none of them talks to the others.</p>
+    <div class="council-seats">
+      ${seatCard('\uD83D\uDCCA','Quant Analyst',r.quant)}
+      ${seatCard('\uD83D\uDCF0','Context Analyst',r.context)}
+      ${seatCard('\uD83D\uDCC8','Market Skeptic',r.market)}
+    </div>
+    <div class="council-arrow" aria-hidden="true">&#8595;&nbsp;&nbsp;synthesised by&nbsp;&nbsp;&#8595;</div>
+    ${finalCard}
+    <figure class="evidence-block"><p>Probability comparison</p>
+      <table class="ktab"><thead><tr><th>Seat</th><th>Home</th><th>Draw</th><th>Away</th></tr></thead>
+      <tbody>${cmp}<tr class="council-total"><td><b>\u2696\uFE0F Council</b></td>
+        <td><b>${pc(c.home)}</b></td><td><b>${pc(c.draw)}</b></td><td><b>${pc(c.away)}</b></td></tr>
+      </tbody></table></figure>
+    <figure class="evidence-block"><p>What changed vs the model</p>
+      <table class="ktab"><tbody>${councilDeltaRows(m)}</tbody></table></figure>
+  </div>`;
+}
+
 function analysisSection(m,key,title,summary,body,open){
   const triggerId=`${m.id}-${key}-trigger`,panelId=`${m.id}-${key}-panel`;
   return `<section class="disclosure-item analysis-section ${open?'open':''}">
@@ -642,7 +779,10 @@ function renderMatchCard(m,watchlist,highlight){
     analysisSection(m,'kalshi','Kalshi market',(m.kalshi?(m.kalshi.thin?'Thin market \u2014 no entry':(m.kalshi.entry&&m.kalshi.entry.grade!=='none'?`${esc(m.kalshi.entry.side)} +${m.kalshi.entry.ev}% vs Kalshi`:'Model agrees with Kalshi')):'No Kalshi market yet'),kalshiBody(m),openSection==='kalshi'),
     analysisSection(m,'model','Model analysis',`xG ${m.xg} \u00B7 confidence ${m.conf}`,modelBody,openSection==='model'),
     analysisSection(m,'people','Players & team news',`${allNews.length} availability update${allNews.length===1?'':'s'}`,peopleBody,openSection==='people'),
-    analysisSection(m,'why','Why this pick','Factors, confidence, and plain-English rationale',whyBody,openSection==='why')
+    analysisSection(m,'why','Why this pick','Factors, confidence, and plain-English rationale',whyBody,openSection==='why'),
+    // optional: absent for every fixture the Council has not forecast, and the card is
+    // byte-identical to before in that case
+    (m.council?analysisSection(m,'council','AI Council \u2014 experimental',councilSummary(m),councilBody(m),openSection==='council'):'')
   ].join('');
   const status=m.finished&&m.result?`${m.result} \u00B7 Full time`:m.venue;
   const card=el(`<article class="fixture-card ${highlight===m.id?'hl':''}" data-id="${esc(m.id)}">

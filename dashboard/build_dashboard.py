@@ -39,6 +39,131 @@ OUT = os.path.join(HERE, "dashboard.json")
 EDGE_MIN = 3.0          # flag an edge at >= +3% expected value
 
 
+# ---------------------------------------------------------------------------------------
+# RULE 38: the AI Council is DISPLAY-ONLY here.
+#
+# This reads two append-only stores the Council writes elsewhere and attaches them to the
+# fixture for rendering. It does NOT call Claude, does not run the Council, and does not feed
+# anything back into ph/pd/pa, the edge calculation, the confidence tier or the betting logic.
+# The Council has one locked forecast graded zero times; letting an ungraded experimental
+# layer touch the priced model would be exactly the mistake this project's evidence log exists
+# to prevent.
+#
+# Everything is optional. A fixture with no Council row renders as it always did, and a
+# malformed reasoning file warns and is skipped rather than taking the build down - RULE 11's
+# empty-feed lesson applied to a new source.
+# ---------------------------------------------------------------------------------------
+COUNCIL_LEDGER = os.path.join(HERE, "council_ledger.csv")
+COUNCIL_REASONING = os.path.join(HERE, "council_reasoning.jsonl")
+
+
+def _council_ledger():
+    """{fixture_key: {...}} of locked Council forecasts, or {} when there are none."""
+    if not os.path.exists(COUNCIL_LEDGER):
+        return {}
+    try:
+        rows = read_csv(COUNCIL_LEDGER)
+    except (OSError, csv.Error) as e:
+        print(f"  ! council ledger unreadable ({e}) - fixtures will render without a Council")
+        return {}
+    out = {}
+    for r in rows:
+        key = r.get("fixture_key")
+        if not key:
+            continue
+        def num(col):
+            v = r.get(col, "")
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+        out[key] = {
+            "home": num("council_home"), "draw": num("council_draw"),
+            "away": num("council_away"),
+            "consensus_score": num("consensus_score"),
+            "locked_at": r.get("locked_at", ""),
+            "late": bool(r.get("late")),
+            "model": [num("model_home"), num("model_draw"), num("model_away")],
+        }
+    return out
+
+
+def _council_reasoning():
+    """{fixture_key: record}. A malformed line is skipped with a warning, never fatal."""
+    if not os.path.exists(COUNCIL_REASONING):
+        return {}
+    out, bad = {}, 0
+    try:
+        with open(COUNCIL_REASONING) as f:
+            lines = f.readlines()
+    except OSError as e:
+        print(f"  ! council reasoning unreadable ({e}) - panels will show summary only")
+        return {}
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            bad += 1
+            continue
+        if isinstance(obj, dict) and obj.get("fixture_key"):
+            out[obj["fixture_key"]] = obj
+        else:
+            bad += 1
+    if bad:
+        print(f"  ! council reasoning: skipped {bad} malformed line(s); "
+              f"{len(out)} record(s) usable")
+    return out
+
+
+def _seat(d):
+    """One specialist, defensively - a partial record renders rather than raising."""
+    if not isinstance(d, dict):
+        return None
+    return {"home": d.get("home"), "draw": d.get("draw"), "away": d.get("away"),
+            "predicted_outcome": d.get("predicted_outcome"),
+            "confidence": d.get("confidence"),
+            "evidence": [str(x) for x in (d.get("evidence") or [])],
+            "uncertainties": [str(x) for x in (d.get("uncertainties") or [])]}
+
+
+def attach_council(weeks):
+    """Hang `council` and, when present, `council_reasoning` on each fixture. Returns counts."""
+    led, reas = _council_ledger(), _council_reasoning()
+    if not led:
+        return {"forecasts": 0, "with_reasoning": 0}
+    n = nr = 0
+    for wk in weeks:
+        for m in wk.get("matches", []):
+            row = led.get(f"{m['home']}|{m['away']}")
+            if not row:
+                continue
+            ch = None
+            rec = reas.get(f"{m['home']}|{m['away']}")
+            if rec:
+                ch = rec.get("chairman") or {}
+            m["council"] = {
+                "home": row["home"], "draw": row["draw"], "away": row["away"],
+                "predicted_outcome": (ch or {}).get("predicted_outcome"),
+                "confidence": (ch or {}).get("confidence"),
+                "consensus_score": row["consensus_score"],
+                "disagreement_note": (ch or {}).get("disagreement_note", ""),
+                "locked_at": row["locked_at"], "late": row["late"],
+            }
+            n += 1
+            if rec:
+                m["council_reasoning"] = {
+                    "quant": _seat(rec.get("quant")),
+                    "context": _seat(rec.get("context")),
+                    "market": _seat(rec.get("market")),
+                    "chairman": ch,
+                }
+                nr += 1
+    return {"forecasts": n, "with_reasoning": nr}
+
+
 def read_csv(p):
     with open(p) as f:
         return list(csv.DictReader(f))
@@ -1237,6 +1362,13 @@ def build():
     # against the result + closing odds once the game is played. This is the live evidence log.
     if players_graded:
         data["players_graded"] = players_graded
+
+    # RULE 38: display-only. Attached AFTER every model number is final, so it cannot
+    # influence ph/pd/pa, edges, tiers or props even by accident.
+    _c = attach_council(data["weeks"])
+    if _c["forecasts"]:
+        print(f"  AI Council (display only): {_c['forecasts']} locked forecast(s) attached, "
+              f"{_c['with_reasoning']} with saved reasoning")
 
     data["results"] = match_log()
     if data["results"].get("matches"):
