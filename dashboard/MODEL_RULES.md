@@ -1238,3 +1238,36 @@ shot-derived strength estimate instead of a generic prior, decaying to zero by ~
 
 **Gate: 1X2 Brier and RPS must improve or hold on held-out seasons in the walk-forward, with
 the gain concentrated in GW1–8. In-sample-only improvement does not ship.**
+
+## Rule 35a — correction: FPL already carries most of it
+
+Rule 35 implied the richer stats needed API-Football. Measured, that is mostly wrong, and the
+correction matters because it removes a dependency.
+
+FPL's `event/{gw}/live` gives 29 fields per player per gameweek. No `shots` column — but
+`expected_goals`, `expected_assists`, `threat` (Opta-derived from goal attempts and their
+locations) and `creativity` (chances created) are all there, and all already collected.
+
+Against the team feed's real numbers, 74 matched team-gameweeks:
+
+| FPL field | vs shots | vs SoT | vs real xG | vs big chances | vs box touches |
+|---|---|---|---|---|---|
+| `expected_goals` | **+0.751** | +0.612 | **+0.997** | **+0.807** | +0.584 |
+| `threat` | +0.633 | +0.501 | +0.649 | +0.394 | +0.607 |
+| `expected_assists` | +0.538 | +0.451 | +0.649 | +0.506 | **+0.675** |
+| `creativity` | +0.569 | +0.330 | +0.518 | +0.224 | +0.526 |
+
+**`r = +0.997` against the feed's own xG: it is literally the same Opta data.** And FPL xG
+tracks real shot volume (+0.751) *better than* `threat` does (+0.633).
+
+So Rule 36's shot-difference result is a finding about the **historical** file, which has no
+xG. Where xG exists — 2026/27 onward, per player, already on disk, refreshed weekly — it is
+strictly better than a raw shot count, because it weights chance quality instead of counting
+a 30-yard hopeful the same as a tap-in.
+
+**The model change needs no new data source.** Team shots for the historical fit, player and
+team xG for the live season, both already collected.
+
+API-Football still adds what FPL genuinely lacks — per-player raw shots, key passes, dribbles,
+duels, touches in box — which matters for refining *scorer* shares later. It is an
+enhancement, not a prerequisite. `apifootball.py` stays, unwired, until it is needed.
