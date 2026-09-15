@@ -260,6 +260,11 @@ class CouncilPrediction:
     confidence: float
     consensus_score: float
     major_disagreement: bool
+    # The Chairman reports the disagreement as PROSE ("the market seat's 10pt gap is
+    # unexplained"), while this field has always been a bool that a ledger can group on. Both
+    # are worth having, so the text is kept rather than collapsed away - throwing it out would
+    # leave "True" with no record of what the panel actually split over.
+    disagreement_note: str = ""
     analyst_predictions: List[AnalystPrediction] = field(default_factory=list)
 
     def __post_init__(self):
@@ -1038,3 +1043,281 @@ async def run_market_skeptic_async(context: MatchContext) -> AnalystPrediction:
 def run_market_skeptic(context: MatchContext) -> AnalystPrediction:
     """Synchronous entry point for the Market Skeptic."""
     return _sync(run_market_skeptic_async(context), MARKET_SKEPTIC_NAME)
+
+
+# ===========================================================================================
+# THE CHAIRMAN — the seat that decides, and the only one that sees the others.
+#
+# Its input is three opinions plus the baseline, and NOTHING else. It does not get a fourth,
+# unrestricted look at the raw data: if the Chairman could read the xG, the news and the
+# market itself, the three specialists would be decoration and the panel would collapse into
+# one opinion wearing four hats.
+#
+# The analysts arrive as "Analyst A / B / C" with their names stripped. A role label is an
+# invitation to weight by reputation rather than by evidence - "the market seat is usually
+# right" is exactly the prior this desk has spent months trying to replace with measurement.
+#
+# HONEST LIMIT: anonymity here is positional, not total. A seat that writes about bookmaker
+# overround is identifiable from its evidence no matter what it is called. What the labels
+# buy is the removal of an automatic hierarchy, not genuine blindness - and the ledger, not
+# this prompt, is what will eventually say which seat deserves weight.
+# ===========================================================================================
+
+CHAIRMAN_NAME = "chairman"
+REQUIRED_ANALYSTS = 3
+ANALYST_LABELS = ("Analyst A", "Analyst B", "Analyst C")
+
+CHAIRMAN_SYSTEM_PROMPT = """\
+You are the chairman of a Premier League forecasting council.
+
+Three specialist analysts have independently evaluated the fixture.
+
+Your task is to synthesize their forecasts into one final calibrated
+Home/Draw/Away probability vector.
+
+You must evaluate the QUALITY OF THEIR EVIDENCE, not their writing style,
+confidence, or verbosity.
+
+You may not introduce any new football facts.
+
+You may not browse the web.
+
+You may not use general Premier League knowledge.
+
+Do not force consensus.
+
+If analysts materially disagree, preserve that uncertainty in the final
+forecast and report a lower consensus score.
+
+If analysts broadly agree for independent reasons, consensus may be higher.
+
+Do not simply average the three probability vectors unless the evidence
+actually supports treating them equally.
+
+CONSENSUS IS NOT CONFIDENCE
+These are two different measurements and you must not let one drive the other.
+
+  consensus_score = how much the three analysts AGREE WITH EACH OTHER
+    0.00-0.30  strong disagreement
+    0.31-0.60  meaningful disagreement
+    0.61-0.80  moderate agreement
+    0.81-1.00  strong agreement
+
+  confidence = how much the PANEL'S EVIDENCE supports the final answer
+
+All three analysts can agree that HOME is most likely while all three say their evidence is
+thin. That is HIGH consensus and LOW confidence, and reporting it that way is correct. The
+reverse also happens: two analysts with strong, specific evidence pulling in opposite
+directions is LOW consensus, and the confidence you report should reflect which evidence
+survives scrutiny, not the fact that they differed.
+
+HOW TO WEIGH THE ANALYSTS
+- Weight by the SPECIFICITY and VERIFIABILITY of what each analyst cites. An analyst quoting
+  a confirmed fact it was given outranks one reasoning from an absence.
+- An analyst that reports it had insufficient information, and stayed near the baseline, is
+  being honest, not useless. Do not penalise it, and do not treat its baseline-like answer as
+  independent corroboration of another analyst who moved.
+- Stated confidence is a claim, not evidence. A "high" backed by one vague sentence is worth
+  less than a "low" backed by two specific figures.
+- Length is not weight. Ignore verbosity entirely.
+- Where an analyst's own uncertainties undercut its conclusion, say so.
+- You may land outside the range of the three analysts if the evidence justifies it, but say
+  why. Usually the answer sits inside their range.
+
+OUTPUT CONTRACT
+Reply with a single JSON object and nothing else - no prose before or after, no markdown
+fence. Exactly these fields:
+
+{
+  "home_probability": float,
+  "draw_probability": float,
+  "away_probability": float,
+  "predicted_outcome": "HOME" | "DRAW" | "AWAY",
+  "confidence": "low" | "medium" | "high",
+  "consensus_score": float,
+  "major_disagreement": string
+}
+
+Rules for those fields:
+- the three probabilities are decimals in [0, 1] and must sum to 1.00
+- predicted_outcome is upper-case and is one of HOME, DRAW, AWAY
+- consensus_score is a decimal between 0 and 1, read against the bands above
+- major_disagreement is a SHORT SENTENCE naming what the panel actually split over, or the
+  exact string "none" when they did not materially disagree
+- every claim you make must trace to something an analyst wrote or to the baseline you were
+  given; you have no other information
+- do not round a probability to 0 or 1; a football match is never certain
+"""
+
+CHAIRMAN = AgentDefinition(
+    description=(
+        "Chairman of the forecasting council. Synthesises three anonymised specialist "
+        "forecasts into one calibrated probability vector, weighting by evidence quality "
+        "rather than stated confidence. Sees only the analysts' output and the baseline - "
+        "never the raw expected goals, team news or market prices the specialists saw."
+    ),
+    prompt=CHAIRMAN_SYSTEM_PROMPT,
+    tools=[],
+    model=None,
+)
+
+
+def _require_three(analysts):
+    if not isinstance(analysts, (list, tuple)):
+        raise CouncilValidationError(
+            f"analysts must be a list of AnalystPrediction, got {type(analysts).__name__}")
+    if len(analysts) != REQUIRED_ANALYSTS:
+        raise CouncilValidationError(
+            f"the Chairman requires exactly {REQUIRED_ANALYSTS} analyst predictions, "
+            f"got {len(analysts)}")
+    for i, a in enumerate(analysts):
+        if not isinstance(a, AnalystPrediction):
+            raise CouncilValidationError(
+                f"analysts[{i}] must be an AnalystPrediction, got {type(a).__name__}")
+    return list(analysts)
+
+
+def serialize_chairman_context(context: MatchContext,
+                               analysts: List[AnalystPrediction]) -> str:
+    """The three opinions, anonymised, plus the baseline. Nothing else.
+
+    Deliberately does NOT include expected goals, form ratings, team news or market prices.
+    Those were each given to one specialist; handing them all to the Chairman would make it a
+    fourth analyst with a better view than the other three, and its job is to judge THEIR
+    reasoning, not to redo it.
+
+    Analyst names are stripped. A role label invites weighting by reputation - see the module
+    comment for why that is the one prior this desk is trying to avoid.
+    """
+    if not isinstance(context, MatchContext):
+        raise CouncilValidationError(
+            f"expected MatchContext, got {type(context).__name__}")
+    analysts = _require_three(analysts)
+
+    L = [f"FIXTURE: {context.home_team} (home) v {context.away_team} (away)"]
+    if context.kickoff:
+        L.append(f"KICKOFF: {context.kickoff}")
+
+    L.append("\nBASELINE FROM THE EXISTING STATISTICAL MODEL (for reference only):")
+    if context.has_model():
+        L.append(f"  P(home) {context.model_home:.4f}   "
+                 f"P(draw) {context.model_draw:.4f}   P(away) {context.model_away:.4f}")
+    else:
+        L.append("  MISSING - no baseline supplied.")
+
+    L.append("\nTHE THREE SPECIALIST FORECASTS")
+    L.append("Each analyst saw a DIFFERENT slice of the evidence, and none saw all of it.")
+    L.append("They are unlabelled on purpose: judge them on what they cite, not on who wrote it.")
+    for label, a in zip(ANALYST_LABELS, analysts):
+        h, d, aw = a.probabilities()
+        L.append(f"\n{label}")
+        L.append(f"  P(home) {h:.4f}   P(draw) {d:.4f}   P(away) {aw:.4f}")
+        L.append(f"  calls it {a.predicted_outcome}, stated confidence {a.confidence:.2f}")
+        L.append("  evidence:")
+        L.extend(f"    - {e}" for e in (a.evidence or ["(none given)"]))
+        L.append("  uncertainties:")
+        L.extend(f"    - {u}" for u in (a.uncertainties or ["(none given)"]))
+
+    L.append("\nYou have no information beyond the above. Do not add football facts.")
+    return "\n".join(L)
+
+
+def chairman_options(model: Optional[str] = None) -> ClaudeAgentOptions:
+    """Locked-down options for the Chairman - identical safeguards to every other seat."""
+    chosen = model or council_model()
+    return ClaudeAgentOptions(
+        model=chosen,
+        system_prompt=CHAIRMAN.prompt,
+        allowed_tools=[],
+        disallowed_tools=list(FORBIDDEN_TOOLS),
+        permission_mode="default",
+        max_turns=1,
+        setting_sources=[],
+        agents={CHAIRMAN_NAME: replace(CHAIRMAN, model=chosen)},
+    )
+
+
+def council_from_payload(obj: Dict[str, Any],
+                         analysts: List[AnalystPrediction]) -> CouncilPrediction:
+    """Turn the Chairman's parsed JSON into a validated CouncilPrediction.
+
+    Like analyst_from_payload, this does NOT normalise: a vector that fails the simplex check
+    raises, and the caller sees exactly what the Chairman said.
+
+    `major_disagreement` arrives as prose and the dataclass field is a bool, so the text is
+    kept in `disagreement_note` and the flag derived from it. "none" (any casing), an empty
+    string and a literal false all mean no material disagreement.
+    """
+    analysts = _require_three(analysts)
+    missing = [k for k in ("home_probability", "draw_probability", "away_probability",
+                           "predicted_outcome", "confidence", "consensus_score")
+               if k not in obj]
+    if missing:
+        raise CouncilParseError(
+            f"chairman payload is missing required field(s): {', '.join(missing)}")
+
+    raw_conf = obj["confidence"]
+    if isinstance(raw_conf, str):
+        key = raw_conf.strip().lower()
+        if key not in CONFIDENCE_LEVELS:
+            raise CouncilParseError(
+                f"confidence must be one of {sorted(CONFIDENCE_LEVELS)}, got {raw_conf!r}")
+        conf = CONFIDENCE_LEVELS[key]
+    else:
+        conf = raw_conf
+
+    raw_dis = obj.get("major_disagreement", "")
+    if isinstance(raw_dis, bool):
+        note, flag = ("", raw_dis)
+    else:
+        note = str(raw_dis or "").strip()
+        flag = bool(note) and note.lower().rstrip(".") not in ("none", "no", "n/a", "false")
+
+    return CouncilPrediction(
+        home_probability=obj["home_probability"],
+        draw_probability=obj["draw_probability"],
+        away_probability=obj["away_probability"],
+        predicted_outcome=obj["predicted_outcome"],
+        confidence=conf,
+        consensus_score=obj["consensus_score"],
+        major_disagreement=flag,
+        disagreement_note=note,
+        analyst_predictions=analysts,
+    )
+
+
+async def run_chairman_async(context: MatchContext,
+                             analysts: List[AnalystPrediction]) -> CouncilPrediction:
+    """Ask the Chairman to synthesise three specialist forecasts into one."""
+    analysts = _require_three(analysts)
+    prompt = serialize_chairman_context(context, analysts)
+    options = chairman_options()
+    fixture = context.fixture_key()
+
+    chunks: List[str] = []
+    result = None
+    try:
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        chunks.append(block.text)
+            elif isinstance(message, ResultMessage):
+                result = message
+    except ClaudeSDKError as e:
+        raise CouncilSDKError(f"Agent SDK failed for {fixture} (chairman): {e}") from e
+
+    if result is not None and getattr(result, "is_error", False):
+        raise CouncilSDKError(
+            f"the chairman errored on {fixture}: "
+            f"{getattr(result, 'result', None) or 'no detail returned'}")
+    if not chunks:
+        raise CouncilParseError(f"the chairman returned no text for {fixture}")
+
+    return council_from_payload(_extract_json("\n".join(chunks)), analysts)
+
+
+def run_chairman(context: MatchContext,
+                 analysts: List[AnalystPrediction]) -> CouncilPrediction:
+    """Synchronous entry point for the Chairman."""
+    return _sync(run_chairman_async(context, analysts), CHAIRMAN_NAME)

@@ -90,6 +90,40 @@ NO_MKT = C.MatchContext(
     "Brentford", "Chelsea", model_home=.42, model_draw=.26, model_away=.32,
     expected_home_goals=1.66, home_form=+3.0, home_news=["something"])
 
+# three specialist opinions to hand the Chairman, and a rich context it must NOT see through
+A_QUANT = C.AnalystPrediction(analyst_name="quant", home_probability=.44,
+    draw_probability=.24, away_probability=.32, predicted_outcome=C.HOME, confidence=.55,
+    evidence=["expected goals 1.66 v 1.55, an edge of +0.11"],
+    uncertainties=["no market price supplied"])
+A_CONTEXT = C.AnalystPrediction(analyst_name="context", home_probability=.34,
+    draw_probability=.28, away_probability=.38, predicted_outcome=C.AWAY, confidence=.55,
+    evidence=["starting goalkeeper confirmed unavailable"],
+    uncertainties=["rest days not supplied"])
+A_MARKET = C.AnalystPrediction(analyst_name="market", home_probability=.52,
+    draw_probability=.26, away_probability=.22, predicted_outcome=C.HOME, confidence=.55,
+    evidence=["model is +10.0 pts above the book on HOME"],
+    uncertainties=["gap unexplained by anything in this payload"])
+THREE = [A_QUANT, A_CONTEXT, A_MARKET]
+
+RICH = C.MatchContext(
+    "Brentford", "Chelsea", kickoff="Fri 18 Sep 19:00",
+    model_home=.42, model_draw=.26, model_away=.32,
+    expected_home_goals=1.66, expected_away_goals=1.55,
+    market_home=.3354, market_draw=.2472, market_away=.4174,
+    kalshi_home=.5050, kalshi_draw=.2650, kalshi_away=.2300,
+    home_form=+3.0, away_form=+1.0,
+    home_news=["Flekken ruled out"], away_news=["Palmer a doubt"])
+
+CHAIR_GOOD = """{
+  "home_probability": 0.43,
+  "draw_probability": 0.26,
+  "away_probability": 0.31,
+  "predicted_outcome": "HOME",
+  "confidence": "medium",
+  "consensus_score": 0.45,
+  "major_disagreement": "one analyst calls AWAY on a confirmed absence while two call HOME"
+}"""
+
 MARKET_GOOD = """{
   "analyst_name": "market",
   "home_probability": 0.54,
@@ -377,6 +411,132 @@ def main():
         {list(C.quant_options().agents)[0], list(C.context_options().agents)[0],
          list(C.market_options().agents)[0]} == {"quant", "context", "market"}))
 
+    print("\n=== CHAIRMAN: exists, and requires exactly three analysts ===")
+    check("CHAIRMAN defined", lambda: _assert(isinstance(C.CHAIRMAN, type(C.QUANT_ANALYST))))
+    check("prompt differs from all three seats",
+          lambda: _assert(C.CHAIRMAN.prompt not in (C.QUANT_ANALYST.prompt,
+                          C.CONTEXT_ANALYST.prompt, C.MARKET_SKEPTIC.prompt)))
+    check("no tools on the definition", lambda: _assert(C.CHAIRMAN.tools == []))
+    check("prompt forbids new football facts",
+          lambda: _assert("may not introduce any new football facts" in C.CHAIRMAN.prompt))
+    check("prompt separates consensus from confidence",
+          lambda: _assert("CONSENSUS IS NOT CONFIDENCE" in C.CHAIRMAN.prompt))
+    check("prompt carries the consensus bands",
+          lambda: _assert("0.31-0.60" in C.CHAIRMAN.prompt and "0.81-1.00" in C.CHAIRMAN.prompt))
+    check("prompt says do not force consensus",
+          lambda: _assert("Do not force consensus" in C.CHAIRMAN.prompt))
+    check("async + sync entry points exist",
+          lambda: _assert(asyncio.iscoroutinefunction(C.run_chairman_async)
+                          and callable(C.run_chairman)))
+    check("two analysts rejected",
+          lambda: C.serialize_chairman_context(RICH, THREE[:2]), C.CouncilValidationError)
+    check("four analysts rejected",
+          lambda: C.serialize_chairman_context(RICH, THREE + [A_QUANT]), C.CouncilValidationError)
+    check("zero analysts rejected",
+          lambda: C.serialize_chairman_context(RICH, []), C.CouncilValidationError)
+    check("non-list rejected",
+          lambda: C.serialize_chairman_context(RICH, A_QUANT), C.CouncilValidationError)
+    check("wrong element type rejected",
+          lambda: C.serialize_chairman_context(RICH, [A_QUANT, A_CONTEXT, {"p": 1}]),
+          C.CouncilValidationError)
+
+    print("\n=== CHAIRMAN: analysts are anonymised ===")
+    ch = C.serialize_chairman_context(RICH, THREE)
+    check("labelled Analyst A/B/C",
+          lambda: _assert(all(l in ch for l in ("Analyst A", "Analyst B", "Analyst C"))))
+    check("seat name 'quant' never appears", lambda: _assert("quant" not in ch.lower()))
+    check("seat name 'context' never appears as a label",
+          lambda: _assert("analyst_name" not in ch and "Context Analyst" not in ch))
+    check("seat name 'market' not used as a label",
+          lambda: _assert("Market Skeptic" not in ch))
+    check("each analyst's probabilities included",
+          lambda: _assert("0.4400" in ch and "0.3400" in ch and "0.5200" in ch))
+    check("each analyst's outcome included",
+          lambda: _assert(ch.count("calls it") == 3))
+    check("each analyst's confidence included", lambda: _assert(ch.count("stated confidence") == 3))
+    check("evidence included",
+          lambda: _assert("an edge of +0.11" in ch and "goalkeeper confirmed unavailable" in ch))
+    check("uncertainties included",
+          lambda: _assert("rest days not supplied" in ch and "gap unexplained" in ch))
+
+    print("\n=== CHAIRMAN: raw specialist-only data is NOT leaked ===")
+    check("raw team news NOT independently exposed", lambda: _assert("Flekken" not in ch))
+    check("raw away news NOT exposed", lambda: _assert("Palmer" not in ch))
+    check("raw expected goals NOT exposed (1.66/1.55 only via quoted evidence)",
+          lambda: _assert(ch.count("1.66") <= 1 and "EXPECTED GOALS" not in ch))
+    check("raw form ratings NOT exposed", lambda: _assert("+3.000" not in ch))
+    check("raw bookmaker price NOT exposed", lambda: _assert("0.3354" not in ch))
+    check("raw kalshi price NOT exposed", lambda: _assert("0.2650" not in ch))
+    check("no BOOKMAKER section", lambda: _assert("BOOKMAKER" not in ch))
+    check("no TEAM NEWS section", lambda: _assert("TEAM NEWS" not in ch))
+    check("baseline model probabilities ARE included",
+          lambda: _assert("0.4200" in ch and "BASELINE" in ch))
+    check("states it has nothing else",
+          lambda: _assert("no information beyond the above" in ch))
+
+    print("\n=== CHAIRMAN: payload -> CouncilPrediction ===")
+    cpred = C.council_from_payload(C._extract_json(CHAIR_GOOD), THREE)
+    check("becomes a CouncilPrediction",
+          lambda: _assert(isinstance(cpred, C.CouncilPrediction)))
+    check("probabilities carried", lambda: _assert(cpred.probabilities() == (.43, .26, .31)))
+    check("consensus carried", lambda: _assert(cpred.consensus_score == 0.45))
+    check("confidence mapped", lambda: _assert(cpred.confidence == 0.55))
+    check("disagreement prose -> bool True",
+          lambda: _assert(cpred.major_disagreement is True))
+    check("disagreement prose preserved",
+          lambda: _assert("confirmed absence" in cpred.disagreement_note))
+    check("'none' -> bool False", lambda: _assert(
+        C.council_from_payload({**C._extract_json(CHAIR_GOOD),
+                                "major_disagreement": "none"}, THREE).major_disagreement is False))
+    check("empty string -> bool False", lambda: _assert(
+        C.council_from_payload({**C._extract_json(CHAIR_GOOD),
+                                "major_disagreement": ""}, THREE).major_disagreement is False))
+    check("the original three analysts are carried",
+          lambda: _assert(cpred.analyst_predictions == THREE))
+    check("carries them by identity, not copies",
+          lambda: _assert(cpred.analyst_predictions[0] is A_QUANT))
+
+    print("\n=== CHAIRMAN: invalid payloads are rejected, not repaired ===")
+    check("consensus below 0", lambda: C.council_from_payload(
+        {**C._extract_json(CHAIR_GOOD), "consensus_score": -0.2}, THREE),
+        C.CouncilValidationError)
+    check("consensus above 1", lambda: C.council_from_payload(
+        {**C._extract_json(CHAIR_GOOD), "consensus_score": 1.4}, THREE),
+        C.CouncilValidationError)
+    check("simplex that does not sum to 1", lambda: C.council_from_payload(
+        {**C._extract_json(CHAIR_GOOD), "home_probability": .9}, THREE),
+        C.CouncilValidationError)
+    check("probability above 1", lambda: C.council_from_payload(
+        {**C._extract_json(CHAIR_GOOD), "draw_probability": 1.2}, THREE),
+        C.CouncilValidationError)
+    check("bad outcome", lambda: C.council_from_payload(
+        {**C._extract_json(CHAIR_GOOD), "predicted_outcome": "HOME WIN"}, THREE),
+        C.CouncilValidationError)
+    check("missing consensus_score", lambda: C.council_from_payload(
+        {k: v for k, v in C._extract_json(CHAIR_GOOD).items() if k != "consensus_score"},
+        THREE), C.CouncilParseError)
+    check("unknown confidence label", lambda: C.council_from_payload(
+        {**C._extract_json(CHAIR_GOOD), "confidence": "very high"}, THREE),
+        C.CouncilParseError)
+    check("malformed JSON", lambda: C._extract_json("The council has decided."),
+          C.CouncilParseError)
+    check("payload with wrong analyst count", lambda: C.council_from_payload(
+        C._extract_json(CHAIR_GOOD), THREE[:2]), C.CouncilValidationError)
+
+    print("\n=== CHAIRMAN: lockdown matches every other seat ===")
+    cho = C.chairman_options()
+    check("no tools allowed", lambda: _assert(list(cho.allowed_tools) == []))
+    check("web tools denied",
+          lambda: _assert({"WebSearch", "WebFetch"} <= set(cho.disallowed_tools)))
+    check("max_turns is 1", lambda: _assert(cho.max_turns == 1))
+    check("permissions not bypassed", lambda: _assert(cho.permission_mode != "bypassPermissions"))
+    check("external settings ignored", lambda: _assert(list(cho.setting_sources) == []))
+    check("all FOUR seats share one lockdown", lambda: _assert(
+        len({(tuple(o.allowed_tools), tuple(o.disallowed_tools), o.max_turns,
+              o.permission_mode, tuple(o.setting_sources))
+             for o in (C.quant_options(), C.context_options(),
+                       C.market_options(), C.chairman_options())}) == 1))
+
     print("\n=== model is configurable, not hard-coded (no network) ===")
     saved = os.environ.get(C.COUNCIL_MODEL_ENV)
     try:
@@ -411,6 +571,12 @@ def main():
               lambda: _assert(C.market_options().agents["market"].model == "claude-haiku-4-5"))
         check("market AgentDefinition pins no model",
               lambda: _assert(C.MARKET_SKEPTIC.model is None))
+        check("chairman honours the env var",
+              lambda: _assert(C.chairman_options().model == "claude-haiku-4-5"))
+        check("chairman's subagent honours it",
+              lambda: _assert(C.chairman_options().agents["chairman"].model == "claude-haiku-4-5"))
+        check("chairman AgentDefinition pins no model",
+              lambda: _assert(C.CHAIRMAN.model is None))
 
         os.environ[C.COUNCIL_MODEL_ENV] = "   "
         check("blank env var counts as unset",
