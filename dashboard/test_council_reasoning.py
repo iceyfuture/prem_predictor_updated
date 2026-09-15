@@ -298,8 +298,10 @@ def main():
     check("real council_ledger.csv byte-identical", lambda: _assert(_fp(L.PATH) == LEDGER_BEFORE))
     check("real council_reasoning.jsonl unchanged",
           lambda: _assert(_fp(CR.PATH) == REASONING_BEFORE))
-    check("real council_reasoning.jsonl still does not exist",
-          lambda: _assert(REASONING_BEFORE is None and not os.path.exists(CR.PATH)))
+    # (An assertion that the production sidecar does not EXIST used to live here. It encoded
+    # "the Council has never run for real", which stopped being true the moment the first
+    # live forecast was locked - and it was redundant anyway: the check above already proves
+    # these tests leave the file byte-identical, which is the actual invariant.)
 
     shutil.rmtree(tmp, ignore_errors=True)
     print(f"\n  {PASS} passed, {FAIL} failed")
