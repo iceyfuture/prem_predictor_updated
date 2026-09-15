@@ -55,6 +55,32 @@ FULL = C.MatchContext(
     home_news="Saka fit", away_news="Palmer a doubt")
 BARE = C.MatchContext("Coventry", "Hull")
 
+# the Context seat's two cases: news supplied, and no news at all
+NEWSY = C.MatchContext(
+    "Brentford", "Chelsea", kickoff="Fri 18 Sep 19:00",
+    model_home=.42, model_draw=.26, model_away=.32,
+    expected_home_goals=1.66, expected_away_goals=1.55,
+    market_home=.3354, market_draw=.2472, market_away=.4174,
+    kalshi_home=.55, home_form=+3.0, away_form=+1.0,
+    home_news=["Flekken (GK) ruled out - confirmed", "Wissa suspended, one match"],
+    away_news="Palmer a doubt, late fitness test")
+NO_NEWS = C.MatchContext(
+    "Brentford", "Chelsea", kickoff="Fri 18 Sep 19:00",
+    model_home=.42, model_draw=.26, model_away=.32,
+    expected_home_goals=1.66, expected_away_goals=1.55,
+    home_form=+3.0, away_form=+1.0, home_news=[], away_news=[])
+
+CONTEXT_GOOD = """{
+  "analyst_name": "context",
+  "home_probability": 0.36,
+  "draw_probability": 0.27,
+  "away_probability": 0.37,
+  "predicted_outcome": "AWAY",
+  "confidence": "medium",
+  "evidence": ["Flekken (GK) ruled out - confirmed, lowers home"],
+  "uncertainties": ["no rest-day data supplied"]
+}"""
+
 
 def main():
     print("=== context serialization ===")
@@ -135,6 +161,93 @@ def main():
           lambda: _assert("invent injuries" in C.QUANT_ANALYST.prompt))
     check("agent definition has no tools", lambda: _assert(C.QUANT_ANALYST.tools == []))
 
+    print("\n=== CONTEXT ANALYST: exists and is a distinct seat ===")
+    check("CONTEXT_ANALYST defined",
+          lambda: _assert(isinstance(C.CONTEXT_ANALYST, type(C.QUANT_ANALYST))))
+    check("its name is 'context'", lambda: _assert(C.CONTEXT_ANALYST_NAME == "context"))
+    check("different prompt from the Quant seat",
+          lambda: _assert(C.CONTEXT_ANALYST.prompt != C.QUANT_ANALYST.prompt))
+    check("no tools on the definition", lambda: _assert(C.CONTEXT_ANALYST.tools == []))
+    check("prompt forbids general PL knowledge",
+          lambda: _assert("general Premier League knowledge" in C.CONTEXT_ANALYST.prompt))
+    check("prompt forbids inventing availability",
+          lambda: _assert("invent player availability" in C.CONTEXT_ANALYST.prompt))
+    check("prompt sets the baseline rule",
+          lambda: _assert("NEUTRAL STARTING POINT" in C.CONTEXT_ANALYST.prompt))
+    check("prompt allows returning the baseline unchanged",
+          lambda: _assert("Returning the baseline is a valid and correct answer"
+                          in C.CONTEXT_ANALYST.prompt))
+    check("async + sync entry points exist",
+          lambda: _assert(asyncio.iscoroutinefunction(C.run_context_analyst_async)
+                          and callable(C.run_context_analyst)))
+
+    print("\n=== CONTEXT ANALYST: what it is shown ===")
+    t = C.serialize_team_context(NEWSY)
+    check("teams present", lambda: _assert("Brentford (home) v Chelsea" in t))
+    check("kickoff present", lambda: _assert("Fri 18 Sep 19:00" in t))
+    check("baseline model probabilities present", lambda: _assert("0.4200" in t and "0.2600" in t))
+    check("supplied home news appears", lambda: _assert("Flekken" in t))
+    check("second home news item appears", lambda: _assert("Wissa suspended" in t))
+    check("away news (a plain string) appears", lambda: _assert("Palmer" in t))
+    check("EXCLUDES expected goals", lambda: _assert("1.66" not in t and "1.55" not in t))
+    check("EXCLUDES form ratings", lambda: _assert("+3.000" not in t))
+    check("EXCLUDES market odds", lambda: _assert("0.3354" not in t))
+    check("EXCLUDES kalshi", lambda: _assert("0.5500" not in t))
+    check("says what is withheld", lambda: _assert("WITHHELD FROM THIS SEAT" in t))
+    check("lists unsupplied categories", lambda: _assert("rest days" in t and "fixture congestion" in t))
+    check("rejects a non-MatchContext", lambda: C.serialize_team_context(None),
+          C.CouncilValidationError)
+
+    print("\n=== CONTEXT ANALYST: missing news is explicit, not silent ===")
+    n = C.serialize_team_context(NO_NEWS)
+    check("says NONE SUPPLIED", lambda: _assert(n.count("NONE SUPPLIED") == 2))
+    check("warns that absence != full strength",
+          lambda: _assert("not 'full-strength squad'" in n))
+    check("baseline still shown with no news", lambda: _assert("0.4200" in n))
+    check("news_items normalises a list", lambda: _assert(len(NEWSY.news_items("home")) == 2))
+    check("news_items normalises a string", lambda: _assert(NEWSY.news_items("away") ==
+                                                           ["Palmer a doubt, late fitness test"]))
+    check("news_items on empty list is []", lambda: _assert(NO_NEWS.news_items("home") == []))
+    check("news_items on None is []", lambda: _assert(BARE.news_items("home") == []))
+    check("dict-shaped news is flattened",
+          lambda: _assert(C.MatchContext("A", "B", home_news=[{"what": "Doe injured"}])
+                          .news_items("home") == ["Doe injured"]))
+    check("has_news false when empty", lambda: _assert(NO_NEWS.has_news() is False))
+    check("missing() reports news gap", lambda: _assert("news" in NO_NEWS.missing()))
+
+    print("\n=== CONTEXT ANALYST: parsing and validation (shared with Quant) ===")
+    cp = C.analyst_from_payload(C._extract_json(CONTEXT_GOOD), C.CONTEXT_ANALYST_NAME)
+    check("valid payload parses", lambda: _assert(cp.analyst_name == "context"))
+    check("probabilities carried", lambda: _assert(cp.probabilities() == (.36, .27, .37)))
+    check("confidence mapped", lambda: _assert(cp.confidence == 0.55))
+    check("malformed JSON raises",
+          lambda: C.analyst_from_payload(C._extract_json("Chelsea look strong"), "context"),
+          C.CouncilParseError)
+    check("bad simplex raises",
+          lambda: C.analyst_from_payload({**C._extract_json(CONTEXT_GOOD),
+                                          "home_probability": .8}, "context"),
+          C.CouncilValidationError)
+    check("bad outcome raises",
+          lambda: C.analyst_from_payload({**C._extract_json(CONTEXT_GOOD),
+                                          "predicted_outcome": "DRAWN"}, "context"),
+          C.CouncilValidationError)
+
+    print("\n=== CONTEXT ANALYST: same lockdown as the Quant seat ===")
+    co = C.context_options()
+    check("no tools allowed", lambda: _assert(list(co.allowed_tools) == []))
+    check("web tools denied", lambda: _assert({"WebSearch", "WebFetch"} <= set(co.disallowed_tools)))
+    check("max_turns is 1", lambda: _assert(co.max_turns == 1))
+    check("permissions not bypassed", lambda: _assert(co.permission_mode != "bypassPermissions"))
+    check("external settings ignored", lambda: _assert(list(co.setting_sources) == []))
+    check("system prompt is the definition's",
+          lambda: _assert(co.system_prompt == C.CONTEXT_ANALYST.prompt))
+    check("lockdown identical to the Quant seat", lambda: _assert(
+        (list(co.allowed_tools), list(co.disallowed_tools), co.max_turns,
+         co.permission_mode, list(co.setting_sources)) ==
+        (list(C.quant_options().allowed_tools), list(C.quant_options().disallowed_tools),
+         C.quant_options().max_turns, C.quant_options().permission_mode,
+         list(C.quant_options().setting_sources))))
+
     print("\n=== model is configurable, not hard-coded (no network) ===")
     saved = os.environ.get(C.COUNCIL_MODEL_ENV)
     try:
@@ -157,6 +270,12 @@ def main():
               lambda: _assert(C.quant_options().agents["quant"].model == "claude-haiku-4-5"))
         check("explicit argument beats the env var",
               lambda: _assert(C.quant_options(model="claude-sonnet-5").model == "claude-sonnet-5"))
+        check("context seat honours the env var",
+              lambda: _assert(C.context_options().model == "claude-haiku-4-5"))
+        check("context seat's subagent honours it",
+              lambda: _assert(C.context_options().agents["context"].model == "claude-haiku-4-5"))
+        check("context AgentDefinition pins no model",
+              lambda: _assert(C.CONTEXT_ANALYST.model is None))
 
         os.environ[C.COUNCIL_MODEL_ENV] = "   "
         check("blank env var counts as unset",

@@ -30,7 +30,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -141,14 +141,41 @@ class MatchContext:
     # recent-form ratings (the supremacy input) and free-text team news
     home_form: Optional[float] = None
     away_form: Optional[float] = None
-    home_news: Optional[str] = None
-    away_news: Optional[str] = None
+    # News arrives from the desk as a LIST of items, and as prose when a human writes it, so
+    # both are accepted. `[]` and `None` both mean "no news supplied" - see news_items().
+    home_news: Optional[Union[str, List[str]]] = None
+    away_news: Optional[Union[str, List[str]]] = None
 
     def has_model(self):
         return None not in (self.model_home, self.model_draw, self.model_away)
 
     def has_market(self):
         return None not in (self.market_home, self.market_draw, self.market_away)
+
+    def news_items(self, side):
+        """Team news for 'home'/'away' as a list of strings. Empty list when none was supplied.
+
+        Tolerates the three shapes the desk actually produces: a sentence, a list of strings,
+        or a list of {"what": ...} rows straight out of the FPL feed. An empty list and None
+        mean the same thing - nothing was supplied - and neither is allowed to read as
+        "confirmed no absences", which is a different and much stronger claim.
+        """
+        raw = self.home_news if side == "home" else self.away_news
+        if raw is None:
+            return []
+        if isinstance(raw, str):
+            return [raw.strip()] if raw.strip() else []
+        out = []
+        for item in raw:
+            if isinstance(item, dict):
+                item = item.get("what") or item.get("text") or item.get("note") or ""
+            item = str(item).strip()
+            if item:
+                out.append(item)
+        return out
+
+    def has_news(self):
+        return bool(self.news_items("home") or self.news_items("away"))
 
     def has_kalshi(self):
         return None not in (self.kalshi_home, self.kalshi_draw, self.kalshi_away)
@@ -172,7 +199,7 @@ class MatchContext:
             gaps.append("kalshi")
         if self.home_form is None and self.away_form is None:
             gaps.append("form")
-        if not (self.home_news or self.away_news):
+        if not self.has_news():
             gaps.append("news")
         return gaps
 
@@ -548,16 +575,19 @@ def quant_options(model: Optional[str] = None) -> ClaudeAgentOptions:
     )
 
 
-async def run_quant_analyst_async(context: MatchContext) -> AnalystPrediction:
-    """Ask the Quant Analyst about one fixture.
+async def _ask_analyst_async(prompt: str, options: ClaudeAgentOptions,
+                             fixture: str, name: str) -> AnalystPrediction:
+    """One panel seat, one question, one validated answer.
+
+    Shared by every analyst ON PURPOSE. The tool lockdown, the single turn, the JSON parsing
+    and the refusal to repair a bad probability vector are the safeguards that make a seat
+    trustworthy; giving each seat its own copy is how they quietly drift apart until one of
+    them is the weak one. Seats differ in their PROMPT and their CONTEXT, not in their rules.
 
     Makes a real Claude request via the Agent SDK, which spawns the bundled Claude Code CLI as
-    a subprocess. Errors are wrapped in CouncilSDKError with the fixture attached, because a
-    bare transport failure three layers down says nothing about which match it was.
+    a subprocess. Errors are wrapped with the fixture attached, because a bare transport
+    failure three layers down says nothing about which match it was.
     """
-    prompt = serialize_quant_context(context)
-    options = quant_options()
-
     chunks: List[str] = []
     result: Optional[ResultMessage] = None
     try:
@@ -569,31 +599,219 @@ async def run_quant_analyst_async(context: MatchContext) -> AnalystPrediction:
             elif isinstance(message, ResultMessage):
                 result = message
     except ClaudeSDKError as e:
-        raise CouncilSDKError(
-            f"Agent SDK failed for {context.fixture_key()}: {e}") from e
+        raise CouncilSDKError(f"Agent SDK failed for {fixture} ({name}): {e}") from e
 
     if result is not None and getattr(result, "is_error", False):
         raise CouncilSDKError(
-            f"the Quant Analyst errored on {context.fixture_key()}: "
+            f"the {name} analyst errored on {fixture}: "
             f"{getattr(result, 'result', None) or 'no detail returned'}")
     if not chunks:
-        raise CouncilParseError(
-            f"the Quant Analyst returned no text for {context.fixture_key()}")
+        raise CouncilParseError(f"the {name} analyst returned no text for {fixture}")
 
-    return analyst_from_payload(_extract_json("\n".join(chunks)))
+    return analyst_from_payload(_extract_json("\n".join(chunks)), name)
 
 
-def run_quant_analyst(context: MatchContext) -> AnalystPrediction:
-    """Synchronous entry point - owns the asyncio boundary so every caller stays synchronous.
+def _sync(coro, name: str) -> AnalystPrediction:
+    """Own the asyncio boundary so every caller stays synchronous.
 
     build_dashboard.py and the rest of the pipeline are synchronous top to bottom, and the
     Agent SDK's query() is an async generator. That boundary lives HERE, once, rather than
-    turning the desk async to accommodate one experimental layer.
+    turning the desk async to accommodate an experimental layer.
     """
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(run_quant_analyst_async(context))
+        return asyncio.run(coro)
+    coro.close()
     raise CouncilSDKError(
-        "run_quant_analyst() was called from inside a running event loop; "
-        "await run_quant_analyst_async(context) instead")
+        f"run_{name}_analyst() was called from inside a running event loop; "
+        f"await run_{name}_analyst_async(context) instead")
+
+
+async def run_quant_analyst_async(context: MatchContext) -> AnalystPrediction:
+    """Ask the Quant Analyst about one fixture. Numbers only - see QUANT_SYSTEM_PROMPT."""
+    return await _ask_analyst_async(
+        serialize_quant_context(context), quant_options(),
+        context.fixture_key(), QUANT_ANALYST_NAME)
+
+
+def run_quant_analyst(context: MatchContext) -> AnalystPrediction:
+    """Synchronous entry point for the Quant Analyst."""
+    return _sync(run_quant_analyst_async(context), QUANT_ANALYST_NAME)
+
+
+# ===========================================================================================
+# THE CONTEXT ANALYST — the second panel seat.
+#
+# Where the Quant Analyst sees numbers and no words, this one sees words and almost no
+# numbers. It gets the existing model's H/D/A as a BASELINE to move away from, and the team
+# news, and nothing else: no expected goals, no form ratings, no market, no exchange. Two
+# seats reading the same evidence would be one seat with extra billing.
+#
+# The failure mode here is worse than the Quant seat's. Asked about a Premier League fixture
+# with no news attached, a model will reach for what it remembers - a manager, a suspension, a
+# "traditionally tough away trip". All of that is untethered from the desk's data and unfalsifiable
+# against it. So: the prompt forbids it, the tools are empty, and the payload states outright
+# which contextual categories were NOT supplied, so silence reads as "unknown" rather than
+# "nothing to report".
+# ===========================================================================================
+
+CONTEXT_ANALYST_NAME = "context"
+
+CONTEXT_SYSTEM_PROMPT = """\
+You are a Premier League team-context forecasting analyst.
+
+You may ONLY use verified contextual information explicitly supplied in MatchContext.
+
+Focus on:
+- injuries
+- suspensions
+- player availability
+- fixture congestion
+- rest days
+- rotation indicators
+- recent squad changes
+- manager changes if explicitly supplied
+- verified team news
+- other contextual information explicitly provided
+
+You must NOT:
+- browse the web
+- use general Premier League knowledge
+- invent injuries
+- invent player availability
+- invent tactical information
+- assume a player is important unless the supplied context says so
+- infer news that was not supplied
+
+If contextual information is missing, say so explicitly.
+
+HOW TO USE THE BASELINE
+You are given the existing statistical model's Home/Draw/Away probabilities. Treat them as a
+NEUTRAL STARTING POINT, not as something to second-guess. You are not being asked to re-rate
+these teams - another analyst does that from the numbers, and you cannot see them.
+
+- Move a probability away from the baseline ONLY where a supplied piece of context justifies
+  it, and say in your evidence which item justified which direction.
+- The size of the move should match the weight of the evidence. A confirmed absence of a
+  first-choice goalkeeper is worth more than an unspecified knock to an unnamed squad player.
+- If NO contextual information was supplied, return the baseline probabilities essentially
+  unchanged, set confidence to "low", and state in uncertainties that there was insufficient
+  context to justify an adjustment. Returning the baseline is a valid and correct answer -
+  inventing a reason to move is not.
+- A supplied item that does not bear on the result (a returning player already expected to
+  start) may leave the baseline alone. Say so rather than manufacturing a nudge.
+- Absence of news is NOT evidence of a full-strength squad. Treat it as unknown.
+
+OUTPUT CONTRACT
+Reply with a single JSON object and nothing else - no prose before or after, no markdown
+fence. Exactly these fields:
+
+{
+  "analyst_name": "context",
+  "home_probability": float,
+  "draw_probability": float,
+  "away_probability": float,
+  "predicted_outcome": "HOME" | "DRAW" | "AWAY",
+  "confidence": "low" | "medium" | "high",
+  "evidence": [string, ...],
+  "uncertainties": [string, ...]
+}
+
+Rules for those fields:
+- the three probabilities are decimals in [0, 1] and must sum to 1.00
+- predicted_outcome is upper-case and is one of HOME, DRAW, AWAY
+- every entry in "evidence" must quote a context item you were actually given, or state that
+  you are returning the baseline because none was given
+- every contextual category listed as not supplied belongs in "uncertainties"
+- do not round a probability to 0 or 1; a football match is never certain
+"""
+
+CONTEXT_ANALYST = AgentDefinition(
+    description=(
+        "Team-context Premier League forecaster. Reads only verified team news supplied in "
+        "MatchContext and adjusts the existing model's baseline probabilities where that news "
+        "justifies it. Sees no expected goals, form, market or exchange prices, and is "
+        "forbidden from using remembered football knowledge."
+    ),
+    prompt=CONTEXT_SYSTEM_PROMPT,
+    tools=[],
+    model=None,                     # resolved per call - see council_model()
+)
+
+# Categories the prompt tells this seat to look for. The desk does not currently supply most
+# of them, and the payload says so explicitly rather than staying silent - silence would let
+# "no rest-day data" be read as "both sides are well rested", which is a much stronger claim
+# than anything the desk knows. Adding a MatchContext field later removes a line from here.
+CONTEXT_CATEGORIES = [
+    "injuries", "suspensions", "player availability", "fixture congestion", "rest days",
+    "rotation indicators", "recent squad changes", "manager changes",
+]
+SUPPLIED_CATEGORIES = {"injuries", "suspensions", "player availability", "verified team news"}
+
+
+def serialize_team_context(context: MatchContext) -> str:
+    """The contextual half of a MatchContext, as text for the prompt.
+
+    Expected goals, form ratings, market prices and exchange quotes are all ABSENT - not
+    merely unused. The Quant Analyst covers the numbers and the Market Skeptic will cover the
+    prices; a seat shown everything is not a second opinion. The model's H/D/A is the one
+    number that crosses over, and only as the baseline this seat is asked to move away from.
+    """
+    if not isinstance(context, MatchContext):
+        raise CouncilValidationError(
+            f"expected MatchContext, got {type(context).__name__}")
+
+    L = [f"FIXTURE: {context.home_team} (home) v {context.away_team} (away)"]
+    if context.kickoff:
+        L.append(f"KICKOFF: {context.kickoff}")
+
+    L.append("\nBASELINE FROM THE EXISTING STATISTICAL MODEL:")
+    if context.has_model():
+        L.append(f"  P(home) {context.model_home:.4f}   "
+                 f"P(draw) {context.model_draw:.4f}   P(away) {context.model_away:.4f}")
+        L.append("  Start from these. Move them only where a context item below justifies it.")
+    else:
+        L.append("  MISSING - no baseline probabilities supplied. Say so, and do not invent one.")
+
+    for side, label in (("home", context.home_team), ("away", context.away_team)):
+        items = context.news_items(side)
+        L.append(f"\nTEAM NEWS - {label} ({'home' if side == 'home' else 'away'}):")
+        if items:
+            L.extend(f"  - {i}" for i in items)
+        else:
+            L.append("  NONE SUPPLIED. This means UNKNOWN, not 'full-strength squad'.")
+
+    absent = [c for c in CONTEXT_CATEGORIES if c not in SUPPLIED_CATEGORIES]
+    L.append("\nCONTEXT CATEGORIES NOT SUPPLIED BY THIS DESK: " + ", ".join(absent))
+    L.append("Do not estimate them. List the ones that matter in your uncertainties.")
+    L.append("\nWITHHELD FROM THIS SEAT: expected goals, form ratings, bookmaker odds, "
+             "exchange prices. Other analysts cover those. Do not guess at them.")
+    return "\n".join(L)
+
+
+def context_options(model: Optional[str] = None) -> ClaudeAgentOptions:
+    """Locked-down options for the Context seat - identical safeguards to the Quant seat."""
+    chosen = model or council_model()
+    return ClaudeAgentOptions(
+        model=chosen,
+        system_prompt=CONTEXT_ANALYST.prompt,
+        allowed_tools=[],
+        disallowed_tools=list(FORBIDDEN_TOOLS),
+        permission_mode="default",
+        max_turns=1,
+        setting_sources=[],
+        agents={CONTEXT_ANALYST_NAME: replace(CONTEXT_ANALYST, model=chosen)},
+    )
+
+
+async def run_context_analyst_async(context: MatchContext) -> AnalystPrediction:
+    """Ask the Context Analyst about one fixture. Team news only - see CONTEXT_SYSTEM_PROMPT."""
+    return await _ask_analyst_async(
+        serialize_team_context(context), context_options(),
+        context.fixture_key(), CONTEXT_ANALYST_NAME)
+
+
+def run_context_analyst(context: MatchContext) -> AnalystPrediction:
+    """Synchronous entry point for the Context Analyst."""
+    return _sync(run_context_analyst_async(context), CONTEXT_ANALYST_NAME)
