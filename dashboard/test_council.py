@@ -786,14 +786,17 @@ def orchestration_tests():
         spy.restore()
 
     spy = _Spy().install()
+    _ledger_before = _ledger_fingerprint()
     before = set(os.listdir(os.path.dirname(os.path.abspath(__file__))))
     try:
         asyncio.run(C.predict_async(CTX))
         after = set(os.listdir(os.path.dirname(os.path.abspath(__file__))))
         check("predict() created NO files", lambda: _assert(before == after))
-        check("no council_ledger.csv written", lambda: _assert(
-            not os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                            "council_ledger.csv"))))
+        # The invariant is that predict() does not WRITE the ledger - not that the ledger
+        # is absent. This originally asserted absence, which silently encoded "the Council
+        # has never run" and broke the moment the first real forecast was locked.
+        check("council_ledger.csv unchanged by predict()", lambda: _assert(
+            _ledger_fingerprint() == _ledger_before))
     finally:
         spy.restore()
 
@@ -807,6 +810,16 @@ def orchestration_tests():
               lambda: asyncio.run(_predict_from_loop(CTX)), C.CouncilSDKError)
     finally:
         spy.restore()
+
+
+def _ledger_fingerprint():
+    """(exists, size, mtime, contents) for the real council ledger - or None if absent."""
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "council_ledger.csv")
+    if not os.path.exists(p):
+        return None
+    st = os.stat(p)
+    with open(p) as f:
+        return (st.st_size, st.st_mtime, f.read())
 
 
 async def _predict_from_loop(ctx):

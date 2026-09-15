@@ -17,6 +17,18 @@ PASS = FAIL = 0
 REAL_LEDGER = L.PATH
 
 
+def _fingerprint():
+    """(size, mtime, contents) of the production ledger, or None when it does not exist."""
+    if not os.path.exists(REAL_LEDGER):
+        return None
+    st = os.stat(REAL_LEDGER)
+    with open(REAL_LEDGER) as f:
+        return (st.st_size, st.st_mtime, f.read())
+
+
+FINGERPRINT_BEFORE = _fingerprint()
+
+
 def check(name, fn, expect=None):
     global PASS, FAIL
     try:
@@ -204,8 +216,11 @@ def main():
           lambda: L.record(ctx(), {"b": 2}, path=os.path.join(tmp, "x.csv")), TypeError)
 
     print("\n=== the REAL ledger was never touched ===")
-    check("dashboard/council_ledger.csv does not exist",
-          lambda: _assert(not os.path.exists(REAL_LEDGER)))
+    # The invariant is that the TESTS never touch the production ledger - not that it is
+    # absent. Asserting absence encoded "the Council has never run", which stopped being true
+    # the moment the first real forecast was locked.
+    check("the real ledger is byte-identical to before these tests",
+          lambda: _assert(_fingerprint() == FINGERPRINT_BEFORE))
     check("every test file lives in the temp dir",
           lambda: _assert(all(f.startswith(tmp) for f in
                               (P, P2, P3, os.path.join(tmp, "nk.csv")))))
