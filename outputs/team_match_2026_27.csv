@@ -79,3 +79,5 @@ season,gw,date,fixture,team,opponent,venue,gf,ga,result,pts,shots,shots_on_targe
 2026-27,4,2026-09-13,5795452,Man City,Man United,A,1,0,W,3,,,,,,,,1.1,0.31,1.01,match,,,,,,,,,,,,
 2026-27,4,2026-09-14,5795450,Leeds,Newcastle,H,4,1,W,3,,,,,,,,2.07,0.77,0.87,match,,,,,,,,,,,,
 2026-27,4,2026-09-14,5795450,Newcastle,Leeds,A,1,4,L,0,,,,,,,,0.87,0.61,2.07,match,,,,,,,,,,,,
+2026-27,5,2026-09-18,5795456,Brentford,Chelsea,H,3,0,W,3,,,,,,,,,,,,,,,,,,,,,,,
+2026-27,5,2026-09-18,5795456,Chelsea,Brentford,A,0,3,L,0,,,,,,,,,,,,,,,,,,,,,,,
