@@ -1428,3 +1428,61 @@ My first version of this check reported `25/50` for per-match stats. `fixture` i
 match id and there is one row per team, so the distinct count *is* the fixture count — halving
 it again invented a second gap. Fixed before shipping, and worth recording: a completeness
 checker that miscounts is worse than none, because it cries wolf.
+
+## Rule 45 — two model experiments, both REJECTED at the gate
+
+Audit findings §8 (global scoring intercept) and §9 (chance-quality information). Both were
+built, both were tested on an outer chronological holdout, and neither ships.
+
+### §8 — a fitted global scoring intercept
+
+The model centres attack and defence (`a -= a.mean()`, `d -= d.mean()`), so the overall
+scoring level is not identified inside the likelihood; `home_adv` absorbs the home/away split
+and a constant `AWAY_CAL = 1.08` is multiplied onto away goals afterwards. Structurally
+untidy. The experiment fits an explicit global term `g` instead and drops the constant.
+
+Outer holdout, 223 matchdays (2024-08-16 .. 2026-05-24), 760 predictions:
+
+| | n | RPS | Brier | log loss | home bias | away bias | total bias |
+|---|---|---|---|---|---|---|---|
+| **current** | 760 | **0.2063** | **0.6034** | **1.0075** | +0.062 | **+0.050** | **+0.112** |
+| intercept | 760 | 0.2071 | 0.6054 | 1.0105 | +0.058 | +0.129 | +0.187 |
+
+RPS difference −0.00080, **t = −1.55, not significant**.
+
+**Rejected.** The gate was "improve, or be indistinguishable *while correcting a demonstrated
+bias*". It is indistinguishable but it does not correct a bias — away-goal bias gets **worse**
+(+0.050 → +0.129) and total-goal bias nearly doubles. `AWAY_CAL = 1.08` is inelegant and it is
+also doing its job; being structurally cleaner is not a reason to ship a model that prices
+away goals worse.
+
+### §9 — chance quality
+
+The audit's preferred form is causal, opponent-adjusted xG-for and xG-against. **That cannot
+be tested here**: `team_match_history.csv` has an `xg` column and it is empty for all 19,760
+rows — 26 seasons with zero xG coverage. Shot difference is the documented fallback, and the
+audit is explicit that the rejected shots-on-target conversion proxy must not be restored.
+
+`SHOT_BLEND` (Rule 37) blends shot-implied goals into the Poisson target. Re-run after Rule 41
+changed the evidence scale, same 223-matchday holdout:
+
+```
+blend      n     Brier       RPS   logloss    vs 0.0   t (day)
+ 0.00    760    0.6034    0.2063    1.0075   +0.0000    0.00
+ 0.10    760    0.6026    0.2059    1.0065   +0.0008    1.87   <- best t
+ 0.20    760    0.6020    0.2056    1.0059   +0.0014    1.67
+ 0.40    760    0.6017    0.2054    1.0057   +0.0017    1.27
+```
+
+**Still rejected. `SHOT_BLEND` stays 0.0.** Every blend improves all three metrics, and none
+reaches significance — and the t-statistic *falls* as the blend grows, meaning the larger
+gains are the less consistent ones. Across three independent runs now (3 seasons: t=1.67;
+2 seasons pre-Rule-41: t=1.99; 2 seasons post: t=1.87) it has never cleared the bar.
+
+The underlying correlation result is real and unchanged — shot difference predicts the next
+match's goal difference better than goal difference does, at every window, on 17–19k
+observations. It just does not survive the translation into priced 1X2 probabilities, because
+Dixon-Coles already compresses that information through a score matrix.
+
+Both experiments are kept in the tree (`sweep_shotblend.py`, the intercept harness) so the
+next person does not rebuild them to reach the same answer.
