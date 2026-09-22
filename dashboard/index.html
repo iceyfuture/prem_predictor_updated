@@ -58,7 +58,7 @@
   .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:12px}
   .card{background:linear-gradient(180deg,var(--panel),var(--bg-2));border:1px solid var(--line);border-radius:var(--r);padding:15px 16px 13px;transition:border-color .18s}
   .card:hover{border-color:var(--line-2)} .card.hl{border-color:var(--pl-cyan);box-shadow:0 0 0 1px var(--pl-cyan)}
-  .card.edge-actionable{border-left:3px solid var(--pl-green)} .card.cold{border-left:3px solid var(--pl-pink)}
+  .card.edge-wide{border-left:3px solid var(--pl-green)} .card.cold{border-left:3px solid var(--pl-pink)}
   .card-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
   .fixture{display:flex;align-items:center;gap:9px;min-width:0}
   .crest{width:31px;height:31px;border-radius:8px;display:grid;place-items:center;font-family:var(--mono);font-weight:700;font-size:10.5px;color:#fff;flex:none;text-shadow:0 1px 2px rgba(0,0,0,.6);border:1px solid rgba(255,255,255,.2)}
@@ -81,13 +81,13 @@
   .lb .big{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--pl-green)}
   .lb .odds{font-family:var(--mono);font-size:11.5px;color:var(--muted)} .lb .odds b{color:var(--ink)}
   .edgebox{justify-self:end;text-align:right;border-radius:10px;padding:6px 10px;min-width:108px;border:1px solid var(--line)}
-  .edgebox.actionable{border-color:rgba(0,255,135,.45);background:rgba(0,255,135,.09)}
+  .edgebox.wide{border-color:rgba(0,255,135,.45);background:rgba(0,255,135,.09)}
   .edgebox.watch{border-color:rgba(255,200,60,.45);background:rgba(255,200,60,.08)}
   .edgebox.low,.edgebox.none{background:transparent}
   .edgebox .l{font-family:var(--mono);font-size:8px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
-  .edgebox.actionable .l{color:var(--pl-green)} .edgebox.watch .l{color:var(--amber)}
+  .edgebox.wide .l{color:var(--pl-green)} .edgebox.watch .l{color:var(--amber)}
   .edgebox .v{font-family:var(--mono);font-size:15px;font-weight:700;margin-top:2px}
-  .edgebox.actionable .v{color:var(--pl-green)} .edgebox.watch .v{color:var(--amber)} .edgebox.low .v{color:var(--muted);font-size:13px} .edgebox.none .v{color:var(--muted);font-size:11.5px;font-weight:500}
+  .edgebox.wide .v{color:var(--pl-green)} .edgebox.watch .v{color:var(--amber)} .edgebox.low .v{color:var(--muted);font-size:13px} .edgebox.none .v{color:var(--muted);font-size:11.5px;font-weight:500}
   .edgebox .s{font-size:9px;color:var(--muted)}
   .extras{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px;align-items:center}
   .chip{display:flex;gap:6px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:5px 9px;font-size:11px}
@@ -225,6 +225,12 @@
   .fwd-pending{color:var(--faint)}
   footer{border-top:1px solid var(--line);padding:16px 0 40px;margin-top:16px}
   .note{font-family:var(--mono);font-size:10.5px;color:var(--faint);line-height:1.7} .note b{color:var(--pl-cyan)}
+  .src-health{margin:18px 0 0;padding:11px 13px;border-left:3px solid var(--danger);
+    background:rgba(173,22,69,.06);font-size:12px;line-height:1.55;color:var(--muted)}
+  .src-health b{color:var(--ink)} .src-health ul{margin:6px 0 0;padding-left:18px}
+  .not-advice{margin:18px 0 0;padding:11px 13px;border-left:3px solid var(--amber);
+    background:rgba(255,200,60,.07);font-size:12px;line-height:1.55;color:var(--muted)}
+  .not-advice b{color:var(--ink)}
   #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--pl-green);color:var(--bg);font-weight:700;font-size:13px;padding:9px 16px;border-radius:10px;opacity:0;transition:opacity .2s;z-index:50;pointer-events:none}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
   @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -457,7 +463,15 @@
     <div id="btBody"></div>
   </section>
 
-  <footer><p class="note"><b>SOURCES:</b> <span id="srcNote"></span> &mdash; analytical view only, not a recommendation to bet.</p></footer>
+  <div id="sourceHealth"></div>
+<div class="not-advice" role="note">
+  <b>Model view vs market view.</b> The percentages here are this desk&rsquo;s own model, shown
+  beside the market&rsquo;s. A disagreement is something to investigate, not an edge: measured
+  out-of-sample over 1,893 matches, blending this model toward the closing line improved its
+  score at <i>every</i> weight, and every apparent betting profit collapsed once its two
+  luckiest tickets were removed. <b>Nothing here is betting advice.</b>
+</div>
+<footer><p class="note"><b>SOURCES:</b> <span id="srcNote"></span> &mdash; analytical view only, not a recommendation to bet.</p></footer>
 </main>
 <div id="toast"></div>
 
@@ -513,10 +527,10 @@ function renderGamesMeta(){
   $('gamesBanner').innerHTML=bits.join(' ');
 }
 function gCount(f){const w=watch();return DATA.weeks.find(x=>x.gw===gw).matches.filter(m=>pass(m,f,w)).length;}
-function pass(m,f,w){if(f==='edges')return m.edge&&m.edge.grade==='actionable';if(f==='high')return m.tier==='high';
+function pass(m,f,w){if(f==='edges')return m.edge&&m.edge.grade==='wide';if(f==='high')return m.tier==='high';
   if(f==='cold')return m.cold_start;if(f==='watch')return w.includes(m.id);return true;}
 function renderFilters(){
-  const F=[['all','All'],['edges','Value edges'],['high','High confidence'],['cold','Cold start'],['watch','Watchlist']];
+  const F=[['all','All'],['edges','Market gaps'],['high','Reliable inputs'],['cold','Cold start'],['watch','Watchlist']];
   $('gamesFilters').replaceChildren(...F.map(([k,lbl])=>{const b=el(`<button type="button" aria-pressed="${k===gFilter}">${lbl}<span class="n">${gCount(k)}</span></button>`);
     b.addEventListener('click',()=>{gFilter=k;renderWeek();});return b;}));
 }
@@ -530,7 +544,7 @@ function likelyOutcome(m){
 }
 function edgeStatus(m){
   if(!m.edge)return m.mkt?{label:'No value edge',detail:'Model and market broadly agree',tone:'none'}:{label:'Awaiting market',detail:'Fair odds only',tone:'none'};
-  const label=m.edge.grade==='actionable'?'Value edge':m.edge.grade==='watch'?'Watch edge':'Low-confidence edge';
+  const label=m.edge.grade==='wide'?'Wide gap vs market':m.edge.grade==='watch'?'Moderate gap':'Small gap';
   return {label,detail:`${m.edge.side} +${m.edge.ev}% @ ${m.edge.odds}`,tone:m.edge.grade};
 }
 function predictionExplanation(m){
@@ -747,7 +761,7 @@ function renderMatchCard(m,watchlist,highlight){
   const quickBody=`<div class="quick-grid">
       <div class="quick-stat"><span>Most likely result</span><b>${esc(likely.label)}</b><small>${likely.p}% model probability</small></div>
       <div class="quick-stat"><span>Most likely score</span><b>${esc(m.score)}</b><small>only ${m.scorelines[0].p}% \u2014 xG ${esc(m.xg)}</small></div>
-      <div class="quick-stat"><span>Confidence</span><b class="status-text ${esc(m.tier)}">${esc(m.tier)}</b><small>${m.conf}/100</small></div>
+      <div class="quick-stat"><span>Input reliability</span><b class="status-text ${esc(m.tier)}">${esc(m.tier)}</b><small>${m.conf}/100</small></div>
       <div class="quick-stat"><span>Value status</span><b class="status-text ${esc(edge.tone)}">${esc(edge.label)}</b><small>${esc(edge.detail)}</small></div>
     </div><p class="human-summary">${esc(predictionExplanation(m))}</p>`;
   const outcome=(label,model,market,fair,odds)=>`<div class="outcome-column"><h5>${esc(label)}</h5><dl>
@@ -762,7 +776,7 @@ function renderMatchCard(m,watchlist,highlight){
   const penalties=(m.why?.conf_reasons||[]);
   const modelBody=`<div class="analysis-facts">
       <div><span>Most likely score</span><b>${esc(m.score)} <small style="opacity:.7">${m.scorelines[0].p}%</small></b></div><div><span>Expected goals</span><b>${esc(m.xg)}</b></div>
-      <div><span>Confidence</span><b>${m.conf}/100</b></div><div><span>Cold start</span><b>${m.cold_start?'Yes':'No'}</b></div>
+      <div><span>Input reliability</span><b>${m.conf}/100</b></div><div><span>Cold start</span><b>${m.cold_start?'Yes':'No'}</b></div>
     </div><dl class="factor-list">${factorRows(m)}</dl>
     <p class="panel-hint">Scorelines are genuinely flat: 1-1 is the most common Premier League result (10.9% of matches) and the model gives it 11.9% on average, so it tops the ranking in most fixtures. The "most likely" score is wrong ~88% of the time by design \u2014 read the expected goals and the win probabilities, not the single scoreline.</p>
     <div class="penalty-note ${penalties.length?'warn':''}"><b>${penalties.length?'Confidence penalties':'Confidence check'}</b><p>${penalties.length?penalties.map(esc).join('; '):'No confidence penalties applied.'}</p></div>`;
@@ -777,9 +791,9 @@ function renderMatchCard(m,watchlist,highlight){
     analysisSection(m,'props','Props &mdash; BTTS, totals, spreads',(m.props?(m.props.best?`${esc(m.props.best.label)} +${m.props.best.ev}%`:(m.props.quoted?`${m.props.quoted} quoted &middot; all thin`:'model prices only')):'\u2014'),propsBody(m),openSection==='props'),
     analysisSection(m,'corners','Corners',(m.corners?`${m.corners.xc_home} \u2013 ${m.corners.xc_away} expected`+(m.corners.actual?` \u00B7 actual ${m.corners.actual.h}\u2013${m.corners.actual.a}`:''):'\u2014'),cornersBody(m),openSection==='corners'),
     analysisSection(m,'kalshi','Kalshi market',(m.kalshi?(m.kalshi.thin?'Thin market \u2014 no entry':(m.kalshi.entry&&m.kalshi.entry.grade!=='none'?`${esc(m.kalshi.entry.side)} +${m.kalshi.entry.ev}% vs Kalshi`:'Model agrees with Kalshi')):'No Kalshi market yet'),kalshiBody(m),openSection==='kalshi'),
-    analysisSection(m,'model','Model analysis',`xG ${m.xg} \u00B7 confidence ${m.conf}`,modelBody,openSection==='model'),
+    analysisSection(m,'model','Model analysis',`xG ${m.xg} \u00B7 input reliability ${m.conf}/100`,modelBody,openSection==='model'),
     analysisSection(m,'people','Players & team news',`${allNews.length} availability update${allNews.length===1?'':'s'}`,peopleBody,openSection==='people'),
-    analysisSection(m,'why','Why this pick','Factors, confidence, and plain-English rationale',whyBody,openSection==='why'),
+    analysisSection(m,'why','Why this pick','Factors, input reliability, and plain-English rationale',whyBody,openSection==='why'),
     // optional: absent for every fixture the Council has not forecast, and the card is
     // byte-identical to before in that case
     (m.council?analysisSection(m,'council','AI Council \u2014 experimental',councilSummary(m),councilBody(m),openSection==='council'):'')
@@ -834,7 +848,24 @@ function tickerItem(n){
   const inner=`<span class="dotf ${esc(n.flag)}"></span><b>${esc(n.who)}</b> <span>${esc(n.team)}</span> &mdash; ${esc(n.what)}`;
   return n.url?`<a href="${esc(n.url)}" target="_blank" rel="noopener">${inner}</a>`:`<span class="ti">${inner}</span>`;
 }
-function renderNews(){
+
+// RULE 44: say when a source is short. A table built from an incomplete store looks exactly
+// like one built from a current store unless something says otherwise.
+function renderSourceHealth(){
+  var el=document.getElementById('sourceHealth'); if(!el) return;
+  var h=DATA.source_health;
+  if(!h || !h.any_incomplete){ el.replaceChildren(); return; }
+  var bad=h.sources.filter(function(r){return r.status!=='ok';});
+  el.innerHTML='<div class="src-health"><b>Some data is incomplete.</b> '+
+    'Figures drawn from these stores cover fewer matches than the season has played, so '+
+    'treat anything derived from them as partial:<ul>'+
+    bad.map(function(r){
+      return '<li><b>'+esc(r.name)+'</b> &mdash; '+r.rows+' of '+r.expected+
+             ' ('+r.complete_pct+'%), '+r.missing+' missing'+
+             (r.note?'. '+esc(r.note):'')+'</li>';}).join('')+
+    '</ul></div>';
+}
+function renderNews();renderSourceHealth(){
   const m=DATA.meta;
   $('staleWarn').replaceChildren(...(m.fpl_stale?[el(`<div class="stale">FPL has not rolled over to ${esc(m.season)} yet &mdash; still serving ${esc(m.fpl_season)} (${esc(m.fpl_gw)}), so this news is end-of-last-season. It refreshes automatically when FPL flips.</div>`)]:[]));
   // rotating ticker: duplicate the list so the marquee loops seamlessly

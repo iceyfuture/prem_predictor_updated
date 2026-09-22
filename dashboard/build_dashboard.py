@@ -164,6 +164,52 @@ def attach_council(weeks):
     return {"forecasts": n, "with_reasoning": nr}
 
 
+# ---------------------------------------------------------------------------------------
+# RULE 44: every source declares what it expected, what it got, and how old it is.
+#
+# The audit found the main current-season store holding 50 fixtures while the richer
+# team-stat store held 38 - and the desk published a table that looked complete from both.
+# Nothing anywhere compared a source's row count to what the season should contain, so a feed
+# that quietly stopped updating looked identical to one that was current.
+#
+# A source that is short is reported as short. A source the desk cannot function without
+# fails the build instead of publishing a plausible-looking blend of different ages.
+# ---------------------------------------------------------------------------------------
+SOURCE_CHECKS = []
+
+
+def check_source(key, name, got, expected, as_of="", critical=False, note=""):
+    """Record one source's completeness. Returns the record; appends to SOURCE_CHECKS."""
+    expected = int(expected or 0)
+    got = int(got or 0)
+    missing = max(expected - got, 0)
+    pct = (got / expected * 100) if expected else 100.0
+    status = ("ok" if missing == 0 else
+              ("thin" if pct >= 75 else "incomplete"))
+    rec = {"key": key, "name": name, "rows": got, "expected": expected,
+           "missing": missing, "complete_pct": round(pct, 1), "status": status,
+           "as_of": as_of, "note": note, "critical": bool(critical)}
+    SOURCE_CHECKS.append(rec)
+    if missing:
+        print(f"  ! {name}: {got}/{expected} ({pct:.0f}%) - {missing} missing"
+              + (f" [{note}]" if note else ""))
+        if critical:
+            raise SystemExit(
+                f"ABORT: {name} is a critical source and is {missing} rows short "
+                f"({got}/{expected}). Refusing to publish a table that would look complete. "
+                f"Fix the feed or mark the source non-critical.")
+    return rec
+
+
+def source_report():
+    """The completeness block the dashboard renders, newest problem first."""
+    order = {"incomplete": 0, "thin": 1, "ok": 2}
+    rows = sorted(SOURCE_CHECKS, key=lambda r: (order.get(r["status"], 3), r["name"]))
+    return {"sources": rows,
+            "worst": rows[0]["status"] if rows else "ok",
+            "any_incomplete": any(r["status"] != "ok" for r in rows)}
+
+
 def read_csv(p):
     with open(p) as f:
         return list(csv.DictReader(f))
@@ -1028,10 +1074,16 @@ def build():
     for n in fpl["news"]:
         news_by_team.setdefault(n["team"], []).append(n)
 
-    def confidence(h, a, priced, vig, cold_pair):
-        """0-100 reliability score for a fixture's prediction, with reasons. Cold-start is
-        the dominant penalty (backtest: cold RPS 0.2315 vs 0.2036 rated); stale news and
-        thin/absent market lines reduce it further."""
+    def reliability(h, a, priced, vig, cold_pair):
+        """0-100 DATA-QUALITY score for a fixture, with reasons.
+
+        RULE 43. This was called "confidence", which it is not. It is not a calibrated
+        probability, it is not derived from the model's own uncertainty, and it says nothing
+        about how likely the forecast is to be right. It starts at 100 and subtracts
+        hand-chosen penalties for known data problems: no rating history, stale team news, no
+        market line to cross-check. That is a reliability-of-inputs indicator, and it is now
+        named and presented as one.
+        """
         c, why = 100, []
         if cold_pair:
             c -= 50; why.append("newly-promoted team, no rating history (priors are guesses)")
@@ -1044,7 +1096,7 @@ def build():
         c = max(5, min(100, c))
         tier = "high" if c >= 75 else ("medium" if c >= 55 else "low")
         if cold_pair:
-            tier = "low"          # promoted-team predictions are never trustworthy enough to act on
+            tier = "low"          # promoted-team inputs are too thin to rely on
         return c, tier, why
 
     weeks, n_edges, n_odds = [], 0, 0
@@ -1064,7 +1116,7 @@ def build():
             cold_pair = (h in cold or a in cold)
             priced = bool(e["odds"])
             vig = e["odds"]["overround"] if priced else None
-            conf, tier, conf_why = confidence(h, a, priced, vig, cold_pair)
+            conf, tier, conf_why = reliability(h, a, priced, vig, cold_pair)
 
             edge = None
             if priced:
@@ -1074,11 +1126,15 @@ def build():
                 side, best = max(evs.items(), key=lambda kv: kv[1])
                 if best >= EDGE_MIN:
                     # grade the edge by confidence. Cold-start (promoted) fixtures can NEVER be
-                    # actionable or watch — the "edge" is just the prior being wrong.
+                    # RULE 43: these grade the SIZE OF THE DISAGREEMENT with the market, not
+                    # a bet. This desk has never demonstrated an edge: blending toward the
+                    # closing line improved the score at every weight over 1,893 matches, and
+                    # every apparent profit collapsed once its two luckiest tickets were
+                    # removed. A gap is a thing to investigate, not a thing to back.
                     grade = ("low" if cold_pair
-                             else ("actionable" if tier == "high"
+                             else ("wide" if tier == "high"
                                    else ("watch" if tier == "medium" else "low")))
-                    if grade == "actionable":
+                    if grade == "wide":
                         n_edges += 1
                     edge = {"side": {"h": h, "d": "Draw", "a": a}[side],
                             "ev": round(best, 1), "odds": dec[side], "grade": grade}
@@ -1221,7 +1277,8 @@ def build():
                 "utc": e.get("utc", ""),
                 "ph": ph, "pd": pd_, "pa": pa,
                 "fair": {k: round(1 / float(p[i]), 2) for i, k in enumerate(("h", "d", "a"))},
-                "mkt": e["odds"], "edge": edge, "conf": conf, "tier": tier, "why": why,
+                "mkt": e["odds"], "edge": edge, "conf": conf, "tier": tier,
+                "reliability": conf, "reliability_tier": tier, "why": why,
                 "kalshi": kal, "props": props, "corners": corners,
                 "score": top_scores(model, h, a)[0]["s"],
                 "scorelines": top_scores(model, h, a),
@@ -1449,6 +1506,36 @@ def build():
     if _c["forecasts"]:
         print(f"  AI Council (display only): {_c['forecasts']} locked forecast(s) attached, "
               f"{_c['with_reasoning']} with saved reasoning")
+
+    # RULE 44: declare what each store should hold, and what it actually does.
+    _played = len([m for wk in data["weeks"] for m in wk.get("matches", []) if m.get("finished")])
+    try:
+        # `fixture` is already the match id and there is one row per team, so the distinct
+        # count IS the fixture count - halving it again reported 25 of 50.
+        _tm = len({r["fixture"] for r in read_csv(
+            os.path.join(ROOT, "outputs", "team_match_2026_27.csv"))})
+    except Exception:
+        _tm = 0
+    try:
+        _fm = len({(r["date"], frozenset((r["team"], r["opponent"]))) for r in read_csv(
+            os.path.join(ROOT, "outputs", "team_fotmob_2026_27.csv"))})
+    except Exception:
+        _fm = 0
+    check_source("fixtures", "Fixture feed", len([m for wk in data["weeks"]
+                                                  for m in wk.get("matches", [])]),
+                 380, as_of=data["meta"]["generated_at"], critical=True)
+    check_source("team_match", "Per-match team stats", _tm, _played,
+                 as_of=data["meta"]["generated_at"],
+                 note="drives form and the rolling tables")
+    check_source("team_rich", "Rich team stats (xG, shots)", _fm, _played,
+                 as_of=data["meta"]["generated_at"],
+                 note="xG strength index; a short store silently narrows it")
+    check_source("strength", "Strength index clubs", len(data.get("strength") or []), 20,
+                 as_of=data["meta"]["generated_at"])
+    data["source_health"] = source_report()
+    if data["source_health"]["any_incomplete"]:
+        bad = [r["name"] for r in data["source_health"]["sources"] if r["status"] != "ok"]
+        print(f"  source health: {', '.join(bad)} incomplete - shown as stale on the desk")
 
     data["results"] = match_log()
     if data["results"].get("matches"):

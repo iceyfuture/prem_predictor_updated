@@ -1381,3 +1381,50 @@ Now:
 Tests (`test_ledger_guard.py`, 21 checks) cover before / at / after kick-off, opening
 immutability, closing freeze, reschedule, repeated builds, timezone handling, a missing `utc`,
 and assert the real ledger is byte-identical afterwards. They run against temporary copies.
+
+## Rule 43 — "confidence" was a data-quality score, and the edge labels implied a bet
+
+Audit finding §4.
+
+The number shown as **confidence** starts at 100 and subtracts hand-chosen penalties: −50 for
+a newly-promoted club, −10 for stale team news, −6 for no market line, −8 for a soft one. It
+is not a calibrated probability, is not derived from the model's own uncertainty, and says
+nothing about how likely a forecast is to be right. It is a **reliability-of-inputs**
+indicator and is now named and presented as one (`reliability`, `reliability_tier`; the old
+keys stay for compatibility).
+
+Edge grades said **actionable / watch**. This desk has never demonstrated an edge — blending
+toward the closing line improved the score at *every* weight over 1,893 matches, and every
+apparent profit collapsed once its two luckiest tickets were removed. Grades now describe the
+**size of the disagreement**: `wide` / `watch` / `low`, labelled "Wide gap vs market",
+"Moderate gap", "Small gap".
+
+The audit asked to keep the not-betting-advice statement visible. **There wasn't one** — it
+existed only in `predict.py`'s CLI footer, not on the dashboard. A standing notice now sits
+above the footer on every page, naming the 1,893-match result so the claim is checkable.
+
+## Rule 44 — a source declares what it expected, what it got, and how old it is
+
+Audit finding §5, reproduced: 50 settled fixtures, 50 rows in the per-match store, **38** in
+the rich team-stat store. Twelve graded fixtures had no xG or shot data, and nothing compared
+any store's row count to what the season should contain — a feed that quietly stopped updating
+looked identical to a current one.
+
+`check_source()` now records rows, expected rows, percentage, freshness and a note for every
+store, and `source_health` is published in the payload and rendered on the desk when anything
+is short. A source marked **critical** (the fixture feed) **fails the build** rather than
+publish a table that would look complete.
+
+Current state:
+
+```
+Rich team stats (xG, shots)   38/50   76.0%   thin
+Fixture feed                 380/380 100.0%   ok
+Per-match team stats          50/50  100.0%   ok
+Strength index clubs          20/20  100.0%   ok
+```
+
+My first version of this check reported `25/50` for per-match stats. `fixture` is already the
+match id and there is one row per team, so the distinct count *is* the fixture count — halving
+it again invented a second gap. Fixed before shipping, and worth recording: a completeness
+checker that miscounts is worse than none, because it cries wolf.
