@@ -122,14 +122,14 @@ def upcoming(days=7, now=None, payload=None, events=None, fixture=None):
     return out
 
 
-def run(days=7, live=False, fixture=None, limit=None, now=None,
+def run(days=7, live=False, fixture=None, limit=None, now=None, allow_no_market=False,
         payload=None, events=None, ledger_path=None, reasoning_path=None, out=print):
     """Decide, and (only with live=True) act. Returns a summary dict."""
     rows = upcoming(days=days, now=now, payload=payload, events=events, fixture=fixture)
     out("AI Council runner" + ("" if live else "   [DRY RUN - no Claude calls, no writes]"))
     out("")
 
-    locked_n = would_run = ran = failed = reasoning_failed = 0
+    locked_n = would_run = ran = failed = reasoning_failed = skipped_no_market = 0
     errors = []
     for r in rows:
         out(f"{r['match']['home']} vs {r['match']['away']}"
@@ -139,8 +139,14 @@ def run(days=7, live=False, fixture=None, limit=None, now=None,
             out("  LOCKED -> skip")
             continue
         if not live:
+            ctx_dry = build_context(r["match"], kickoff=r["kickoff"].isoformat(timespec="minutes"))
+            if not allow_no_market and not C.has_usable_market(ctx_dry):
+                skipped_no_market += 1
+                out("  NOT LOCKED -> would SKIP: MARKET DATA UNAVAILABLE")
+                continue
             would_run += 1
-            out("  NOT LOCKED -> would run Council")
+            out(f"  NOT LOCKED -> would run Council"
+                f"  (market: {', '.join(C.market_sources(ctx_dry))})")
             continue
         if limit is not None and ran >= limit:
             would_run += 1
@@ -155,6 +161,14 @@ def run(days=7, live=False, fixture=None, limit=None, now=None,
             out("  LOCKED (raced) -> skip")
             continue
         ctx = build_context(r["match"], kickoff=r["kickoff"].isoformat(timespec="minutes"))
+
+        # RULE 40: do not spend four Claude calls on a fixture where the Market Skeptic has
+        # no price to be skeptical about. `--allow-no-market` overrides deliberately.
+        if not allow_no_market and not C.has_usable_market(ctx):
+            skipped_no_market += 1
+            out("  MARKET DATA UNAVAILABLE -> skip (no bookmaker and no exchange price)")
+            out("     pass --allow-no-market to lock it anyway")
+            continue
         try:
             prediction = C.predict(ctx)
         except Exception as e:                      # keep going; one bad fixture is not fatal
@@ -200,6 +214,8 @@ def run(days=7, live=False, fixture=None, limit=None, now=None,
     out(f"  upcoming: {len(rows)}")
     out(f"  locked: {locked_n}")
     out(f"  {'ran' if live else 'would_run'}: {ran if live else would_run}")
+    if skipped_no_market:
+        out(f"  skipped, no market data: {skipped_no_market}")
     if live and reasoning_failed:
         out(f"  reasoning not saved: {reasoning_failed} (forecasts still locked)")
     if live and failed:
@@ -208,6 +224,7 @@ def run(days=7, live=False, fixture=None, limit=None, now=None,
             out(f"    {k}: {msg}")
     return {"upcoming": len(rows), "locked": locked_n, "would_run": would_run,
             "ran": ran, "failed": failed, "reasoning_failed": reasoning_failed,
+            "skipped_no_market": skipped_no_market,
             "errors": errors,
             "keys": [r["key"] for r in rows], "live": live}
 
@@ -220,10 +237,13 @@ def main(argv=None):
                    help="actually call Claude and write to the ledger (default: dry run)")
     p.add_argument("--fixture", metavar="HOME|AWAY",
                    help='run one fixture only, e.g. --fixture "Brentford|Chelsea"')
+    p.add_argument("--allow-no-market", action="store_true",
+                   help="lock a forecast even when no bookmaker or exchange price exists")
     p.add_argument("--limit", type=int,
                    help="run at most N NEW fixtures (locked ones never count)")
     args = p.parse_args(argv)
-    s = run(days=args.days, live=args.live, fixture=args.fixture, limit=args.limit)
+    s = run(days=args.days, live=args.live, fixture=args.fixture, limit=args.limit,
+            allow_no_market=args.allow_no_market)
     return 1 if s["failed"] else 0
 
 

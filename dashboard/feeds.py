@@ -17,11 +17,14 @@ it is actually serving so the UI can label stale news instead of showing it as c
 import json
 import os
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, ".cache")
 os.makedirs(CACHE, exist_ok=True)
+
+# Books open roughly a week out; asking for days beyond this buys nothing but requests.
+ODDS_HORIZON_DAYS = 14
 
 ESPN = ("https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/"
         "scoreboard?dates={}&limit=500")
@@ -121,30 +124,64 @@ def parse_odds(comp):
 
 
 # --------------------------------------------------------------------- ESPN
-def _espn_events_raw(start="20260801", end="20270601", chunk_days=45):
-    """All PL events in the window, fetched in chunks (ESPN caps a single range)."""
+def _espn_days(start="20260801", end="20270601", days=None, step=1):
+    """The YYYYMMDD strings to ask ESPN for.
+
+    RULE 39: ESPN's scoreboard stopped accepting DATE RANGES. Measured against the live
+    endpoint on 2026-09-22:
+
+        ?dates=20260801-20260915  -> 400 {"code":400,"message":"Failed to get events endpoint."}
+        ?dates=20261010-20261017  -> 400   (a 7-day range fails too - not a length cap)
+        ?dates=20261010           -> 200   77 KB, 6 events, all 6 carrying DraftKings odds
+        (no dates param)          -> 200
+
+    So the range SYNTAX is what broke, not our parameters, not the odds, and not the parser -
+    parse_odds() still reads today's payload correctly and returns ~6.5-7% overround. That is
+    why every fixture has been unpriced since: the fixtures come from FotMob regardless, and
+    only the odds overlay depended on this call.
+
+    `days` lets the caller name the exact matchdays it needs, which is what the odds overlay
+    does - a whole season fetched one day at a time would be ~300 requests for the ~40 days
+    that actually have a fixture on them.
+    """
+    if days is not None:
+        return sorted({d for d in days if d})
     s = datetime.strptime(start, "%Y%m%d")
     e = datetime.strptime(end, "%Y%m%d")
+    out, cur = [], s
+    while cur <= e:
+        out.append(cur.strftime("%Y%m%d"))
+        cur += timedelta(days=step)
+    return out
+
+
+def _espn_events_raw(start="20260801", end="20270601", chunk_days=45, days=None):
+    """All PL events for the given days. One request per day - ESPN rejects ranges now."""
     seen, out = set(), []
-    cur = s
-    while cur < e:
-        nxt = min(cur + timedelta(days=chunk_days), e)
-        rng = f"{cur.strftime('%Y%m%d')}-{nxt.strftime('%Y%m%d')}"
+    failed = 0
+    for day in _espn_days(start, end, days):
         try:
-            data = _get(ESPN.format(rng), f"espn_{rng}.json")
+            data = _get(ESPN.format(day), f"espn_{day}.json")
         except Exception as ex:
-            print(f"  ! ESPN {rng}: {ex}")
-            cur = nxt + timedelta(days=1)
+            failed += 1
+            if failed <= 3:                     # one line per broken day, not three hundred
+                print(f"  ! ESPN {day}: {ex}")
             continue
         for ev in data.get("events", []):
             if ev["id"] in seen:
                 continue
             seen.add(ev["id"])
-            c = ev["competitions"][0]
+            comps = ev.get("competitions") or []
+            if not comps:
+                continue
+            c = comps[0]
             try:
-                h = next(x for x in c["competitors"] if x["homeAway"] == "home")
-                a = next(x for x in c["competitors"] if x["homeAway"] == "away")
-            except StopIteration:
+                # KeyError matters as much as StopIteration here: a malformed event with no
+                # `competitors` used to raise out of the whole loop and lose every remaining
+                # fixture for that day. One bad record should cost one record.
+                h = next(x for x in c["competitors"] if x.get("homeAway") == "home")
+                a = next(x for x in c["competitors"] if x.get("homeAway") == "away")
+            except (StopIteration, KeyError, TypeError):
                 continue
             hn = ESPN_TEAMS.get(h["team"]["displayName"])
             an = ESPN_TEAMS.get(a["team"]["displayName"])
@@ -165,7 +202,6 @@ def _espn_events_raw(start="20260801", end="20270601", chunk_days=45):
                 "as": int(a["score"]) if str(a.get("score", "")).isdigit() else None,
                 "odds": parse_odds(c),
             })
-        cur = nxt + timedelta(days=1)
     out.sort(key=lambda x: x["utc"])
     return out
 
@@ -348,8 +384,28 @@ def _overlay_odds(ev, *a, **kw):
     normal case this module exists to tolerate, so a failure here leaves the fixtures intact
     and unpriced rather than taking the build down.
     """
+    # Ask ONLY for the days that have an unplayed fixture within the window a book actually
+    # prices. A season fetched day-by-day would be ~300 requests for ~40 useful ones, and a
+    # finished match's closing line is already locked in the ledger - refetching it is waste.
+    horizon = datetime.now(timezone.utc) + timedelta(days=ODDS_HORIZON_DAYS)
+    want = set()
+    for e in ev:
+        if e.get("finished") or e.get("live"):
+            continue
+        t = e.get("utc")
+        if not t:
+            continue
+        try:
+            when = datetime.fromisoformat(str(t).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if datetime.now(timezone.utc) <= when <= horizon:
+            want.add(when.strftime("%Y%m%d"))
+    if not want:
+        print(f"  odds: no unplayed fixture inside {ODDS_HORIZON_DAYS} days - nothing to price")
+        return ev
     try:
-        espn = _espn_events_raw(*a, **kw)
+        espn = _espn_events_raw(days=sorted(want))
     except Exception as e:
         print(f"  ! ESPN odds unavailable ({e}) - fixtures stay unpriced")
         return ev

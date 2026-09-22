@@ -416,6 +416,37 @@ FORBIDDEN_TOOLS = ["WebSearch", "WebFetch", "Bash", "Read", "Write", "Edit",
                    "Glob", "Grep", "NotebookEdit", "Task"]
 
 
+def has_usable_market(context) -> bool:
+    """Does this fixture have ANY market price for the Market Skeptic to work from?
+
+    RULE 40. The Market seat's whole job is to compare the model against a price and quantify
+    the gap. With neither a bookmaker nor an exchange quote it has nothing to be skeptical
+    ABOUT: it falls back to the baseline, reports low confidence, and the panel silently
+    becomes two opinions rather than three - while still costing four Claude calls.
+
+    That is not hypothetical. Tottenham|Aston Villa was locked with no bookmaker price, so its
+    row carries no market_rps and is excluded from every Council-vs-market comparison. One of
+    three graded forecasts is unusable for that question.
+
+    Either source is enough - they are independent, and the seat handles having only one
+    (it caps its own confidence and says so). Only the total absence of both is disqualifying.
+    """
+    if not isinstance(context, MatchContext):
+        raise CouncilValidationError(
+            f"expected MatchContext, got {type(context).__name__}")
+    return context.has_market() or context.has_kalshi()
+
+
+def market_sources(context) -> list:
+    """Which market sources this fixture actually has, for reporting."""
+    out = []
+    if context.has_market():
+        out.append("bookmaker")
+    if context.has_kalshi():
+        out.append("exchange")
+    return out
+
+
 def serialize_quant_context(context: MatchContext) -> str:
     """The quantitative half of a MatchContext, as text for the prompt.
 
