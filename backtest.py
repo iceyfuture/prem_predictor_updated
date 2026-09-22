@@ -12,12 +12,17 @@ Honest out-of-sample protocol:
     match's result or any future result.
 
 Scores: log-loss, Brier, RPS (ranked probability score, respects H<D<A ordering), accuracy.
-Baselines: bookmaker closing odds (Pinnacle), climatology (fixed base rates), home-always.
+Baselines: bookmaker closing odds, climatology (fixed base rates), home-always.
 Also prints a home-win calibration table + ECE. Saves outputs/backtest_predictions.csv.
 
-    ~/prem_predictor/.venv/bin/python backtest.py [START_DATE]   # default 2021-08-01
+The market comparison is restricted to ONE odds provider (default: the primary provider
+in odds.csv) so the benchmark cannot silently change source mid-window, and is reported
+as a paired difference with a season-clustered CI -- predictions within a season share a
+fitted model, so treating fixtures as independent understates the interval.
+
+    ~/prem_predictor/.venv/bin/python backtest.py [START_DATE] [--provider NAME]
 """
-import csv, os, sys
+import collections, csv, math, os, sys
 import numpy as np
 import pandas as pd
 import prem_dixon_coles as dc
@@ -43,12 +48,51 @@ def scores(P, Y):
     return ll, br, rps(P, Y), ac
 
 
+def _season(d):
+    """Season start year: August-May seasons are labelled by the year they begin."""
+    return d.year if d.month >= 7 else d.year - 1
+
+
 def outcome(h, a):
     return 0 if h > a else (1 if h == a else 2)
 
 
+def paired_clustered(a, b, clusters):
+    """Mean of (a - b) with a CI clustered on `clusters` (here: season).
+
+    Fixtures in a season are predicted by models sharing the same training history, so
+    they are not independent draws. Clustering on season widens the interval honestly.
+    """
+    d = np.asarray(a) - np.asarray(b)
+    g = collections.defaultdict(list)
+    for v, c in zip(d, clusters):
+        g[c].append(v)
+    means = np.array([np.mean(v) for v in g.values()])
+    m = float(d.mean())
+    if len(means) < 2:
+        return m, float("nan"), float("nan"), len(means)
+    se = float(means.std(ddof=1) / math.sqrt(len(means)))
+    return m, se, (m / se if se > 0 else float("nan")), len(means)
+
+
+def per_match(P, Y):
+    """Per-fixture Brier and RPS, so differences can be paired before averaging."""
+    P = np.clip(np.asarray(P), 1e-9, 1); P = P / P.sum(1, keepdims=True)
+    oh = np.eye(3)[Y]
+    br = np.sum((P - oh) ** 2, axis=1)
+    cp = np.cumsum(P, axis=1)[:, :2]; cy = np.cumsum(oh, axis=1)[:, :2]
+    rp = np.sum((cp - cy) ** 2, axis=1) / 2.0
+    ll = -np.log(P[np.arange(len(Y)), Y])
+    return br, rp, ll
+
+
 def main():
-    start = sys.argv[1] if len(sys.argv) > 1 else "2021-08-01"
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    start = args[0] if args else "2021-08-01"
+    want_provider = None
+    for i, a in enumerate(sys.argv):
+        if a == "--provider" and i + 1 < len(sys.argv):
+            want_provider = sys.argv[i + 1]
     df = so.rolling_form(so.load_results())              # causal form on full history
     mapping = so.fit_mapping(df[df.date < pd.Timestamp(start)])
     base = df[df.date < pd.Timestamp(start)]
@@ -58,6 +102,14 @@ def main():
 
     odds = pd.read_csv(ODDS)
     odds["date"] = pd.to_datetime(odds.date)
+    if "provider" not in odds.columns:
+        raise SystemExit("odds.csv has no provider column -- re-run ingest_odds.py "
+                         "so the market benchmark carries its provenance.")
+    provider = want_provider or odds.provider.mode().iat[0]
+    dropped = int((odds.provider != provider).sum())
+    odds = odds[odds.provider == provider]
+    print(f"Market benchmark: provider={provider} ({len(odds)} priced fixtures); "
+          f"dropped {dropped} rows from other providers.")
     okey = {(r.date, r.home_team, r.away_team): (r.p_h, r.p_d, r.p_a)
             for r in odds.itertuples(index=False)}
 
@@ -105,11 +157,25 @@ def main():
     mask = [r["mkt"] is not None for r in recs]
     Ym = Y[mask]; BLm = BL[np.array(mask)]
     MK = np.array([r["mkt"] for r in recs if r["mkt"] is not None])
-    print(f"\n--- vs bookmaker closing line (Pinnacle), {len(Ym)} matches with odds ---")
+    seasons = [_season(r["date"]) for r in recs if r["mkt"] is not None]
+    print(f"\n--- vs bookmaker closing line ({provider}), {len(Ym)} of {len(Y)} "
+          f"matches priced ---")
     print(hdr); print("-" * len(hdr))
-    for name, P in [("BLEND 0.75/0.25", BLm), ("Bookmaker (closing)", MK)]:
+    for name, P in [("BLEND 0.75/0.25", BLm), (f"Market ({provider})", MK)]:
         ll, br, rp, ac = scores(P, Ym)
         print(f"{name:<26}{ll:>9.4f}{br:>8.4f}{rp:>8.4f}{ac*100:>7.1f}%")
+    mb, mr, ml = per_match(BLm, Ym)
+    kb, kr, kl = per_match(MK, Ym)
+    print(f"\n  paired model - market, CI clustered by season "
+          f"(n={len(Ym)} fixtures, {len(set(seasons))} seasons; positive = model worse):")
+    for lab, a, b in (("Brier", mb, kb), ("RPS", mr, kr), ("logloss", ml, kl)):
+        m, se, t, nc = paired_clustered(a, b, seasons)
+        if se != se:
+            print(f"    {lab:<8}{m:+.5f}   (only {nc} season, no interval)")
+            continue
+        lo, hi = m - 1.96 * se, m + 1.96 * se
+        verdict = "model better" if hi < 0 else ("market better" if lo > 0 else "indistinguishable")
+        print(f"    {lab:<8}{m:+.5f}   95% CI [{lo:+.5f}, {hi:+.5f}]   t={t:+.2f}   {verdict}")
     home_always = float(np.mean(Y == 0))
     print(f"{'home-always (acc only)':<26}{'':>9}{'':>8}{'':>8}{home_always*100:>7.1f}%")
 

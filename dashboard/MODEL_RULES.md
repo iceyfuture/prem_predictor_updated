@@ -167,6 +167,14 @@ signal the market has not already priced. Consequences: do not trade 1X2 against
 the model's value has to come from markets the book prices loosely (thin props) or from
 domains with NO market at all (FPL team selection, which is where it demonstrably helps).
 
+> **Annotated 2026-09-22 (Rule 46).** Those 3,040 matches were priced by a benchmark that
+> silently switched provider mid-2025/26 — 2,870 Pinnacle rows and 170 average-closing rows
+> pooled as one "market". Re-cut to a single provider (`avg_closing`, 2,660 matched fixtures,
+> 7 seasons) the finding is unchanged and now has an interval on it: paired RPS
+> +0.01488, 95% CI [+0.01061, +0.01915] clustered by season. The market is still ahead, by
+> more than the mixed-provider figure suggested. The conclusion stands; the evidence for it
+> is now clean.
+
 ### Rule 4 REPAIRED — 2026-08-25 (evidence shrinkage for thin-data clubs, "K")
 
 **The bug.** Rule 4 only ever applied to clubs *missing* from the fitted model. Rule 1 refits
@@ -1486,3 +1494,121 @@ Dixon-Coles already compresses that information through a score matrix.
 
 Both experiments are kept in the tree (`sweep_shotblend.py`, the intercept harness) so the
 next person does not rebuild them to reach the same answer.
+
+## Rule 46 — a benchmark that changes provider mid-season is not a benchmark
+
+Audit finding §6. The claim to check was that Football-Data's Pinnacle prices "became
+systematically stale after 2025-07-23". Checked against `.state/odds_raw` rather than taken
+on faith, and the reproducible problem turned out to be different — and worse.
+
+### What the data actually shows
+
+Coverage of Pinnacle closing prices on played fixtures, per season:
+
+```
+season    played  PinnCl  AvgCl   PinnOpen
+2018/19      380     380      0        380
+2019/20      380     380    380        380
+...          380     380    380        380
+2024/25      380     380    380        380
+2025/26      380     210    380        210   <- collapse
+```
+
+The Pinnacle feed stops dead: present for every fixture to 2026-01-08, absent for every
+fixture from 2026-01-17 on. A clean date break with zero interleaving. Opening and closing
+columns die together, so this is a dead upstream feed, not a book that stopped pricing games.
+**The break is in January 2026, not July 2025 — the audit's date is wrong for this dataset.**
+
+The old `pick_odds` walked a five-deep fallback chain per row. So halfway through 2025/26 the
+"market" silently became a different market, and nothing recorded it. `backtest.py` then
+printed `vs bookmaker closing line (Pinnacle)` over 170 rows that were not Pinnacle.
+
+### The accuracy claim, which does NOT survive
+
+On the 210 fixtures of 2025/26 where both exist, Pinnacle scores *worse* than the average
+closing line — paired dBrier **+0.0027**, which reverses the sign it held in all six prior
+seasons. Tempting. But cluster by matchday and it is t=+1.39; difference-in-differences
+against the pooled 2019–2025 baseline (n=2280) is **+0.0029, 95% CI [−0.0010, +0.0067],
+t=+1.46**. Not significant.
+
+**So: degraded accuracy is suspected, not established, and is not claimed anywhere.** The
+coverage collapse is the hard evidence and it is sufficient on its own.
+
+### The fix
+
+Provenance, not a hard-coded stale-date cutoff:
+
+* `ingest_odds.py` records `provider`, `price_type`, `overround`, `collected_at`,
+  `source_file` and `source_sha8` on every row. `quotes()` returns every provider that priced
+  a fixture; `pick()` chooses visibly instead of falling through a chain. The runner-up is
+  kept in `alt_*` so a second source can be checked without re-downloading.
+* **Primary is now average closing (`AvgC`), not Pinnacle.** This deliberately gives up the
+  nominally sharpest line. A provider that is complete across the whole window is worth more
+  than one that vanishes mid-season: 380/380 every season from 2019/20. Only 2018/19, where
+  `AvgC` does not exist at all, still uses Pinnacle — labelled, and in its own season.
+* `collected_at` is the mtime of our cached download. Football-Data does not timestamp
+  individual quotes, so it is an upper bound on when *we* observed the price, not when the
+  book posted it. Documented as such rather than dressed up as a quote time.
+* Both consumers filter to one provider and refuse an `odds.csv` with no provenance column.
+* Ingest now defaults forward to the current season, so the benchmark cannot silently freeze.
+
+### Model versus market, recalculated on matched fixtures
+
+Walk-forward, `avg_closing` only, paired and clustered by season — fixtures within a season
+share a fitted model, so treating them as independent understates the interval:
+
+```
+n = 2660 matched fixtures over 7 seasons     model      market
+  RPS                                       0.2116     0.1968
+  Brier                                     0.6030     0.5717
+  logloss                                   1.0107     0.9639
+  accuracy                                   50.6%      55.0%
+
+  paired model - market (positive = model worse)
+  RPS       +0.01488   95% CI [+0.01061, +0.01915]   t=+6.83
+  Brier     +0.03131   95% CI [+0.02285, +0.03976]   t=+7.25
+  logloss   +0.04682   95% CI [+0.03194, +0.06170]   t=+6.17
+```
+
+The market wins on every proper scoring rule by a margin no clustering can absorb. Matched
+coverage also went from 210 Pinnacle + 170 average in 2025/26 to 380 average — the comparison
+got both cleaner and larger. **No edge, stated in the page itself rather than in a footnote.**
+
+### The dashboard no longer hard-codes its own verdict
+
+The Kalshi panel used to carry a frozen string, `RPS 0.2061 vs 0.1953`. Those numbers were
+from an older build and did not match anything current. `marketCaveat()` now reads
+`DATA.backtest.market` and writes the sentence from live figures, including the provider, the
+matched n and the clustered CI — and phrases the verdict three ways, so if the model ever does
+edge ahead the page says so without anyone remembering to update a literal.
+
+## Rule 47 — one mangled character killed every panel on the site
+
+Found while verifying Rule 46 in a browser, not by any test.
+
+Commit `626cb71` (Rule 43/44) shipped this into `dashboard/index.html`:
+
+```js
+function renderNews();renderSourceHealth(){
+```
+
+The intended edit was to call `renderSourceHealth()` from the top of `renderNews()`. Instead
+it merged two declarations into one invalid statement.
+
+The page has **one** inline `<script>`. A single `SyntaxError` anywhere in it means the whole
+script never executes — so `DATA` never loaded, no panel rendered, and every feature on the
+site was dead. The build still succeeded. `dashboard.json` was still correct. All 561 tests
+still passed. Nothing looked wrong from the command line.
+
+This is almost certainly what "the github page looks like it did before we fixed it" was
+describing, days before I found it.
+
+**`dashboard/test_dashboard_html.py` now parses the page's JavaScript on every run**, with
+JavaScriptCore (ships with macOS), and separately greps for `function name();` — the exact
+shape of the mangle. Verified by reintroducing the bug: both checks fail, then pass again once
+reverted. If the engine is missing the test SKIPs with a message saying so, so an absent
+dependency is never mistaken for a pass.
+
+The lesson is narrow and worth keeping: **a test suite that only imports Python can certify a
+completely broken website.** Anything that ships a browser artefact needs one check that the
+browser itself would have made.

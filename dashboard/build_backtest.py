@@ -9,9 +9,10 @@ Writes dashboard/backtest.json with:
   per_season    RPS + accuracy per season (stability)
   cold_start    rated vs cold-start fixtures (why promoted-team edges are downgraded)
   goals         predicted vs actual total goals, and over/under 2.5 calibration
-  market        model vs bookmaker closing line on the priced subset
+  market        model vs bookmaker closing line on the priced subset, restricted to a
+                single odds provider and reported with a season-clustered paired CI
 """
-import json, os, sys
+import collections, json, math, os, sys
 import numpy as np
 import pandas as pd
 
@@ -28,6 +29,46 @@ def _history(name):
         if os.path.exists(p):
             return p
     return os.path.expanduser(os.path.join("~/premier_league_history", name))
+
+
+def _season(d):
+    """Season start year; August-May seasons are labelled by the year they begin."""
+    return d.year if d.month >= 7 else d.year - 1
+
+
+def _brier_each(P, O, M):
+    return np.sum((P - O) ** 2, 1), np.sum((M - O) ** 2, 1)
+
+
+def _rps_each(P, O, M):
+    def f(X):
+        cx = np.cumsum(X, 1)[:, :2]; co = np.cumsum(O, 1)[:, :2]
+        return np.sum((cx - co) ** 2, 1) / 2.0
+    return f(P), f(M)
+
+
+def _ll_each(P, O, M):
+    def f(X):
+        return -np.sum(O * np.log(np.clip(X, 1e-15, 1)), 1)
+    return f(P), f(M)
+
+
+def _paired(a, b, clusters):
+    """Mean paired difference with a cluster-robust 95% CI."""
+    d = np.asarray(a) - np.asarray(b)
+    g = collections.defaultdict(list)
+    for v, c in zip(d, clusters):
+        g[c].append(v)
+    means = np.array([np.mean(v) for v in g.values()])
+    m = float(d.mean())
+    if len(means) < 2:
+        return {"diff": round(m, 5), "ci": None, "verdict": "insufficient clusters"}
+    se = float(means.std(ddof=1) / math.sqrt(len(means)))
+    lo, hi = m - 1.96 * se, m + 1.96 * se
+    verdict = "model better" if hi < 0 else ("market better" if lo > 0 else "indistinguishable")
+    return {"diff": round(m, 5), "ci": [round(lo, 5), round(hi, 5)],
+            "t": round(m / se, 2) if se > 0 else None, "clusters": len(means),
+            "verdict": verdict}
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -127,11 +168,17 @@ def main():
     goals = {"mean_pred": round(float(out.pred_goals.mean()), 2),
              "mean_act": round(float(out.act_goals.mean()), 2), "buckets": gb}
 
-    # model vs market on the priced subset
+    # model vs market on the priced subset, one provider only
     market = None
     if os.path.exists(ODDS):
         od = pd.read_csv(ODDS)
         od["date"] = pd.to_datetime(od.date)
+        if "provider" not in od.columns:
+            raise SystemExit("odds.csv has no provider column -- re-run ingest_odds.py so "
+                             "the market benchmark carries its provenance.")
+        provider = od.provider.mode().iat[0]
+        n_all = len(od)
+        od = od[od.provider == provider]
         key = out.copy()
         key["d"] = key.date.dt.strftime("%Y-%m-%d")
         od["d"] = od.date.dt.strftime("%Y-%m-%d")
@@ -141,9 +188,21 @@ def main():
             Om = V.onehot(mg.hs, mg.as_)
             Pm = mg[["ph", "pd", "pa"]].values
             Mk = mg[["p_h", "p_d", "p_a"]].values
-            market = {"n": len(mg),
-                      "model": {"rps": round(V.rps(Pm, Om), 4), "logloss": round(V.logloss(Pm, Om), 4), "acc": round(V.acc(Pm, Om), 4)},
-                      "market": {"rps": round(V.rps(Mk, Om), 4), "logloss": round(V.logloss(Mk, Om), 4), "acc": round(V.acc(Mk, Om), 4)}}
+            seas = [_season(d) for d in mg.date]
+            paired = {k: _paired(a, b, seas) for k, (a, b) in
+                      {"rps": _rps_each(Pm, Om, Mk), "brier": _brier_each(Pm, Om, Mk),
+                       "logloss": _ll_each(Pm, Om, Mk)}.items()}
+            market = {"n": len(mg), "n_model_fixtures": len(out),
+                      "provider": provider, "price_type": "closing",
+                      "providers_dropped": n_all - len(od),
+                      "seasons": len(set(seas)),
+                      "model": {"rps": round(V.rps(Pm, Om), 4), "brier": round(V.brier(Pm, Om), 4),
+                                "logloss": round(V.logloss(Pm, Om), 4), "acc": round(V.acc(Pm, Om), 4)},
+                      "market": {"rps": round(V.rps(Mk, Om), 4), "brier": round(V.brier(Mk, Om), 4),
+                                 "logloss": round(V.logloss(Mk, Om), 4), "acc": round(V.acc(Mk, Om), 4)},
+                      "paired": paired,
+                      "note": ("model minus market, positive = model worse; 95% CI clustered "
+                               "by season because fixtures in a season share a fitted model")}
 
     data = {"meta": {"generated_at": pd.Timestamp.utcnow().isoformat(timespec="minutes"),
                      "seasons": f"{test[0]}..{test[-1]}", "n": len(out),
@@ -151,8 +210,13 @@ def main():
             "headline": headline, "calibration": calib, "per_season": per_season,
             "cold_start": cold_rows, "goals": goals, "market": market}
     json.dump(data, open(OUT, "w"), separators=(",", ":"))
-    print(f"wrote {OUT}: RPS {headline[0]['rps']}, {len(calib)} calib bins, "
-          f"{len(per_season)} seasons, market={'yes' if market else 'no'}")
+    if market:
+        print(f"wrote {OUT}: RPS {headline[0]['rps']}, {len(calib)} calib bins, "
+              f"{len(per_season)} seasons, market={market['provider']} "
+              f"n={market['n']} ({market['paired']['rps']['verdict']} on RPS)")
+    else:
+        print(f"wrote {OUT}: RPS {headline[0]['rps']}, {len(calib)} calib bins, "
+              f"{len(per_season)} seasons, market=no")
 
 
 if __name__ == "__main__":

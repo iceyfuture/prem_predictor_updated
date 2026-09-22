@@ -717,8 +717,8 @@ function kalshiBody(m){
         : `Model and Kalshi broadly agree &mdash; no entry.`));
   return `<table class="ktab"><thead><tr><th>Outcome</th><th>Model</th><th>Kalshi mid</th><th>Ask</th><th>Diff</th><th>EV</th></tr></thead><tbody>${rows}</tbody></table>
     <p class="human-summary" style="margin-top:10px">${verdict}</p>
-    <p class="panel-hint">Kalshi is an exchange: the price in cents <i>is</i> the implied probability, and you pay the ask to buy YES. Overround here is ${k.vig!=null?k.vig+'%':'n/a'} vs ~6.7% at a sportsbook, so a disagreement is less likely to be vig. <a class="src" href="${esc(k.url)}" target="_blank" rel="noopener">Open the market on Kalshi &#8599;</a></p>
-    <p class="panel-hint" style="color:var(--amber)">Backtest caveat: out-of-sample the model trails the closing line (RPS 0.2061 vs 0.1953). When it disagrees with a sharp market, history says the market is more often right &mdash; treat these as candidates to investigate, not validated edges.</p>`;
+    <p class="panel-hint">Kalshi is an exchange: the price in cents <i>is</i> the implied probability, and you pay the ask to buy YES. Overround here is ${k.vig!=null?k.vig+'%':'n/a'} vs ~6.7% at a sportsbook, so a disagreement is less likely to be vig. <a class="src" href="${esc(k.url)}" target="_blank" rel="noopener">Open the market on Kalshi &#8599;</a></p>`+
+    `<p class="panel-hint" style="color:var(--amber)">${marketCaveat()}</p>`;
 }
 function propsBody(m){
   const pr=m.props;
@@ -865,7 +865,8 @@ function renderSourceHealth(){
              (r.note?'. '+esc(r.note):'')+'</li>';}).join('')+
     '</ul></div>';
 }
-function renderNews();renderSourceHealth(){
+function renderNews(){
+  renderSourceHealth();
   const m=DATA.meta;
   $('staleWarn').replaceChildren(...(m.fpl_stale?[el(`<div class="stale">FPL has not rolled over to ${esc(m.season)} yet &mdash; still serving ${esc(m.fpl_season)} (${esc(m.fpl_gw)}), so this news is end-of-last-season. It refreshes automatically when FPL flips.</div>`)]:[]));
   // rotating ticker: duplicate the list so the marquee loops seamlessly
@@ -1343,7 +1344,7 @@ function renderBacktest(){
     <div class="bt-tiles">${tiles.map(t=>`<div class="bt-tile"><div class="lbl">${t[0]}</div><div class="val">${t[1]}</div><div class="sub">${t[2]}</div></div>`).join('')}</div>
     <div class="disclosure-list backtest-disclosures" id="backtestDisclosures">
       ${item('calibration','Calibration','Predicted probability compared with actual frequency','<figure class="evidence-block"><p>Points near the diagonal indicate honest probabilities.</p><div id="cal"></div></figure>')}
-      ${item('market','Model vs market',b.market?b.market.n+' priced matches against the closing line':'No market data','<figure class="evidence-block"><p>The bookmaker close is the benchmark to beat.</p><div id="mkt"></div></figure>')}
+      ${item('market','Model vs market',b.market?b.market.n+' priced matches vs the '+String(b.market.provider||'closing').replace(/_/g,' ')+' line':'No market data','<figure class="evidence-block"><p>The bookmaker close is the benchmark to beat.</p><div id="mkt"></div></figure>')}
       ${item('goals','Goals analysis',`Mean model ${b.goals.mean_pred} vs actual ${b.goals.mean_act} goals`,'<figure class="evidence-block"><p>Predicted and actual scoring by predicted-total bucket.</p>'+goalsTable(b.goals)+'</figure>')}
       ${item('seasons','Seasonal stability',`${b.per_season.length} out-of-sample seasons`,'<figure class="evidence-block"><p>Out-of-sample RPS by season. Lower is better.</p><div id="seas"></div></figure>')}
       ${item('cold','Cold-start results','Rated clubs compared with newly promoted teams','<figure class="evidence-block"><p>The promoted-team split shows the cost of limited rating history.</p><div id="cold"></div></figure>')}
@@ -1460,7 +1461,34 @@ function drawMarket(mkt,dc){
   const rows=[['Model (OOS)',mkt.model.rps,'var(--pl-cyan)'],['Bookmaker close',mkt.market.rps,'var(--pl-green)']];
   const mx=Math.max(...rows.map(r=>r[1]))*1.08;
   $('mkt').innerHTML=`<div class="cmp">`+rows.map(r=>`<div class="row"><span class="lab">${r[0]}</span><div class="bar"><i style="width:${(r[1]/mx*100).toFixed(0)}%;background:${r[2]}"></i></div><span class="num">${r[1].toFixed(4)}</span></div>`).join('')+
-    `</div><p style="margin:10px 0 0;font-size:10.5px;color:var(--faint);font-family:var(--mono)">RPS, lower better. Model accuracy ${(mkt.model.acc*100).toFixed(1)}% vs market ${(mkt.market.acc*100).toFixed(1)}%.</p>`;
+    `</div><p style="margin:10px 0 0;font-size:10.5px;color:var(--faint);font-family:var(--mono)">RPS, lower better. Model accuracy ${(mkt.model.acc*100).toFixed(1)}% vs market ${(mkt.market.acc*100).toFixed(1)}%.</p>`+
+    marketPaired(mkt);
+}
+/* Provenance + uncertainty for the market benchmark. A point estimate alone invites
+   reading noise as an edge, so show the provider, the matched sample and the paired
+   interval clustered by season. */
+function marketCaveat(){
+  const m=DATA&&DATA.backtest&&DATA.backtest.market;
+  if(!m||!m.paired||!m.paired.rps||!m.paired.rps.ci)
+    return 'Backtest caveat: the model has not been shown to beat the closing line out of sample. Treat disagreements as candidates to investigate, not validated edges.';
+  const pr=m.paired.rps,src=String(m.provider||'closing').replace(/_/g,' ');
+  if(pr.verdict==='model better')
+    return `Backtest caveat: out of sample the model edges the ${src} line on RPS (${m.model.rps.toFixed(4)} vs ${m.market.rps.toFixed(4)}, n=${m.n}), but a historical edge is not a priced edge once vig, spread and liquidity are paid. Still not betting advice.`;
+  if(pr.verdict==='market better')
+    return `Backtest caveat: out of sample the model trails the ${src} line (RPS ${m.model.rps.toFixed(4)} vs ${m.market.rps.toFixed(4)} on ${m.n} matched fixtures; paired difference +${pr.diff.toFixed(4)}, 95% CI ${pr.ci[0].toFixed(4)} to ${pr.ci[1].toFixed(4)} clustered by season). When it disagrees with a sharp market, history says the market is more often right \u2014 treat these as candidates to investigate, not validated edges.`;
+  return `Backtest caveat: out of sample the model and the ${src} line are statistically indistinguishable (RPS ${m.model.rps.toFixed(4)} vs ${m.market.rps.toFixed(4)}, n=${m.n}, 95% CI ${pr.ci[0].toFixed(4)} to ${pr.ci[1].toFixed(4)}). A disagreement is not an edge.`;
+}
+function marketPaired(mkt){
+  const pr=mkt.paired&&mkt.paired.rps;
+  const src=mkt.provider?`<b>${esc(String(mkt.provider).replace(/_/g,' '))}</b>`:'unlabelled source';
+  let line=`Benchmark: ${src}${mkt.price_type?' ('+esc(mkt.price_type)+')':''}, `+
+    `${mkt.n} priced of ${mkt.n_model_fixtures||mkt.n} modelled fixtures`+
+    (mkt.providers_dropped?`; ${mkt.providers_dropped} rows from other providers excluded so the benchmark never switches source mid-window`:'')+'.';
+  if(pr&&pr.ci){
+    const v=pr.verdict==='market better'?'the market is ahead':pr.verdict==='model better'?'the model is ahead':'the two are indistinguishable';
+    line+=` Paired RPS difference ${pr.diff>0?'+':''}${pr.diff.toFixed(4)} (95% CI ${pr.ci[0].toFixed(4)} to ${pr.ci[1].toFixed(4)}, clustered by season, ${pr.clusters} seasons) &mdash; ${v}.`;
+  }
+  return `<p style="margin:8px 0 0;font-size:10.5px;color:var(--faint);font-family:var(--mono)">${line}</p>`;
 }
 function drawSeasons(ps){
   const mx=Math.max(...ps.map(s=>s.rps))*1.05,mn=Math.min(...ps.map(s=>s.rps))*0.96;
