@@ -583,7 +583,13 @@ def record_props_ledger(weeks, built_at):
             pr = m.get("props")
             if not pr:
                 continue
-            started = m["finished"] or m["live"]
+            # RULE 42: freeze on the CLOCK, not on feed status. A feed that is slow to flip
+            # `live` would otherwise let the closing number keep moving after kick-off.
+            # RULE 42 applies to props too: a market first priced at or after kick-off is
+            # not a forecast. Same clock-based freeze as the 1X2 ledger.
+            _ko = _ko_utc(m)
+            _after_ko = bool(_ko and datetime.fromisoformat(built_at.replace("Z", "+00:00")) >= _ko)
+            started = m["finished"] or m["live"] or _after_ko
             for p_ in pr["rows"]:
                 key = f"{m['home']}|{m['away']}|{p_['kind']}|{p_['side'] or '-'}|{p_['line'] or '-'}"
                 rec = rows.get(key, {})
@@ -753,6 +759,23 @@ def _same(rec, keys, vals):
     return all(str(rec.get(k, "")) == str("" if v is None else v) for k, v in zip(keys, vals))
 
 
+def _ko_utc(m):
+    """A fixture's kickoff as an absolute UTC datetime, or None if it cannot be resolved.
+
+    RULE 42. The ledger stored kickoff as m["time"] - "Fri 21 Aug 19:00". No year, no
+    timezone, so nothing downstream could compare it to anything. `utc` carries the real
+    ISO timestamp and is kept alongside for exactly this.
+    """
+    for key in ("utc", "kickoff_utc"):
+        v = m.get(key)
+        if v:
+            try:
+                return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+            except ValueError:
+                pass
+    return None
+
+
 def record_ledger(weeks, built_at):
     """RULE 5 + Kalshi forward test.
 
@@ -775,13 +798,37 @@ def record_ledger(weeks, built_at):
             key = f"{m['home']}|{m['away']}"   # stable: kickoff times move with TV picks
             rec = rows.get(key, {})
             k = m.get("kalshi")
+            ko = _ko_utc(m)
+            now_dt = datetime.fromisoformat(built_at.replace("Z", "+00:00"))
+            after_ko = bool(ko and now_dt >= ko)
+
             if not rec.get("pred_at"):        # first sighting -> lock the opening prediction
+                # RULE 42: a fixture first seen at or after kickoff is NOT a forecast. The
+                # audit reproduced this: a match discovered after full time was stamped
+                # pred_at=now, graded in the same build and scored Brier 0.0002 - a near
+                # perfect "prediction" of a result already known. No live row was affected
+                # (all 50 settled rows were predicted before the season), but the path was
+                # open. Such rows are still written, so the desk keeps a record of what it
+                # showed, and marked late=1 so every score excludes them.
                 rec = {"key": key, "gw": w["gw"], "home": m["home"], "away": m["away"],
-                       "kickoff": m["time"], "pred_at": built_at,
+                       "kickoff": m["time"], "kickoff_utc": ko.isoformat() if ko else "",
+                       "pred_at": built_at, "late": "1" if after_ko else "",
                        "pred_h": m["ph"], "pred_d": m["pd"], "pred_a": m["pa"],
                        "result": "", "outcome": "", "graded": ""}
+                if after_ko:
+                    print(f"  ! LATE: {key} first seen at/after kickoff "
+                          f"({ko:%Y-%m-%d %H:%M}) - recorded, excluded from scoring")
+            rec.setdefault("late", "")
+            if ko:
+                # Follows a reschedule as well as backfilling an old row. Writing it
+                # unconditionally would be idempotent anyway (same value, same string), but a
+                # TV pick that MOVES the kickoff must move this too - a stale kickoff_utc is
+                # exactly what the late check would then get wrong.
+                rec["kickoff_utc"] = ko.isoformat()
             rec["kickoff"] = m["time"]          # may move with TV picks; key stays stable
-            started = m["finished"] or m["live"]
+            # RULE 42: freeze on the CLOCK, not on feed status. A feed slow to flip `live`
+            # would otherwise let the closing number keep moving after kick-off.
+            started = m["finished"] or m["live"] or after_ko
             if not started:
                 # Refresh the CLOSING numbers on every build until the game starts - but only
                 # move the TIMESTAMP when a number actually moved. Stamping unconditionally
@@ -825,7 +872,7 @@ def record_ledger(weeks, built_at):
                     rec["closer"] = ("model" if rec["brier_model"] < rec["brier_kalshi"]
                                      else "kalshi" if rec["brier_kalshi"] < rec["brier_model"] else "tie")
             rows[key] = rec
-    cols = ["key", "gw", "home", "away", "kickoff", "pred_at", "pred_h", "pred_d", "pred_a",
+    cols = ["key", "gw", "home", "away", "kickoff", "kickoff_utc", "late", "pred_at", "pred_h", "pred_d", "pred_a",
             "close_at", "close_h", "close_d", "close_a",
             "kal_at", "kal_h", "kal_d", "kal_a", "kal_vig", "kal_url",
             "line_h", "line_d", "line_a", "result", "outcome", "graded",
@@ -837,7 +884,8 @@ def record_ledger(weeks, built_at):
             w.writerow(r)
 
     # ---- settled-market scorecard for the Model Desk ----
-    settled = [r for r in rows.values() if r.get("graded") and r.get("brier_kalshi")]
+    settled = [r for r in rows.values()
+               if r.get("graded") and r.get("brier_kalshi") and not r.get("late")]
     tracked = sum(1 for r in rows.values() if r.get("kal_h"))
     def avg(key, src):
         v = [float(r[key]) for r in src if r.get(key) not in (None, "")]
@@ -1168,6 +1216,9 @@ def build():
                 "venue": e["venue"], "time": kt.strftime("%a %d %b %H:%M"),
                 "status": e["status"], "finished": e["finished"], "live": e["live"],
                 "result": (f"{e['hs']}-{e['as']}" if e["finished"] and e["hs"] is not None else None),
+                # the absolute kickoff, kept so RULE 42 can compare against a real clock -
+                # m["time"] is a display string with no year and no timezone
+                "utc": e.get("utc", ""),
                 "ph": ph, "pd": pd_, "pa": pa,
                 "fair": {k: round(1 / float(p[i]), 2) for i, k in enumerate(("h", "d", "a"))},
                 "mkt": e["odds"], "edge": edge, "conf": conf, "tier": tier, "why": why,

@@ -1338,3 +1338,46 @@ quantifiably weaker than its own documentation claimed.
 **Live effect:** provisional clubs went from 2 (Coventry, Hull) to 5, adding Ipswich, Leeds
 and Sunderland — yo-yo clubs whose evidence genuinely is thin inside an 8-year window once it
 is measured honestly.
+
+## Rule 42 — a prediction made at or after kick-off is not a prediction
+
+Audit finding §2, reproduced before changing anything.
+
+`record_ledger` had **no kick-off guard at all** — it never compared `pred_at` to kick-off, and
+it could not have: kick-off was stored as `'Fri 21 Aug 19:00'`, a display string with no year
+and no timezone. A fixture first seen after full time was therefore stamped `pred_at = now`,
+graded in the same build, and scored as a forecast. The audit's synthetic case returned
+**Brier 0.0002** — a near-perfect "prediction" of a result already known.
+
+**No live row was affected.** All 50 settled rows were predicted before the season started and
+none shares a day between `pred_at` and `graded`; the audit's own `pred_at_late_settled: 0`
+agrees. This was a latent path, not damage already done — worth stating plainly, because
+"reproduced a case where…" reads worse than the data supports.
+
+The irony is that `council_ledger.py` has had this guard since it was written, because
+`player_ledger.py` once locked 485 rows a day after the gameweek. The main ledger never got it.
+
+Now:
+
+- **`kickoff_utc`** stores the absolute ISO timestamp alongside the display string, and
+  **follows a reschedule** rather than only backfilling once.
+- A first sighting at or after kick-off is written but stamped **`late=1`**, and late rows are
+  **excluded from the settled scorecard**.
+- Closing numbers freeze on the **clock**, not on feed status — a feed slow to flip `live`
+  could otherwise let a closing number move after kick-off.
+- The same guard now covers **props**, which had none.
+- Migration is idempotent: 380/380 rows backfilled, 0 flagged late, all 50 settled preserved.
+
+### Two real bugs my own tests caught while writing this
+
+1. **The freeze landed on the wrong function.** `started = ... or after_ko` matched first in
+   `record_props_ledger`, leaving `record_ledger` unguarded — and leaving a **latent
+   `NameError`**, since `after_ko` was never defined there. It had not fired only because `or`
+   short-circuits when a fixture is finished or live. Both functions now compute their own.
+2. **`kickoff_utc` did not follow a reschedule.** The backfill was `if not rec.get(...)`, so a
+   TV pick that moved a kick-off left a stale timestamp — precisely the value the late check
+   depends on.
+
+Tests (`test_ledger_guard.py`, 21 checks) cover before / at / after kick-off, opening
+immutability, closing freeze, reschedule, repeated builds, timezone handling, a missing `utc`,
+and assert the real ledger is byte-identical afterwards. They run against temporary copies.
