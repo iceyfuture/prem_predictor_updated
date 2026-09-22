@@ -306,6 +306,35 @@ COLD_K = 15.0
 PROVISIONAL_N = 40.0
 
 
+def cold_start_weight(n):
+    """How much of a club's own fitted rating to keep, given `n` matches of evidence.
+
+    RULE 41 (second half). The old rule had a CLIFF: shrink by n/(n+15) below 40 evidence
+    units, and not at all at or above it. A club at 39.9 kept 72.7% of its rating and one at
+    40.0 kept 100% - a 27-point discontinuity at an arbitrary line, so one ordinary result
+    could flip a club's price hard in either direction.
+
+    Now continuous. The same n/(n+K) curve is rescaled so it reaches exactly 1.0 at
+    PROVISIONAL_N and stays there:
+
+        w(n) = [n/(n+K)] / [N/(N+K)]   for n < N,   1.0 otherwise
+
+    No jump anywhere, established clubs are untouched by construction, and thin clubs are
+    shrunk harder than before because the measurement bug that was inflating their evidence
+    5.87x is gone. On the corrected scale: 0 matches -> 0.00, 5 -> 0.34, 17 -> 0.72,
+    40+ -> 1.00.
+
+    This is a GUARDRAIL, not a validated accuracy gain - see MODEL_RULES.md. The original
+    K sweep found t=0.83, not significant, and correcting the scale does not change that.
+    """
+    if n <= 0:
+        return 0.0
+    if n >= PROVISIONAL_N:
+        return 1.0
+    ceiling = PROVISIONAL_N / (PROVISIONAL_N + COLD_K)
+    return min(1.0, (n / (n + COLD_K)) / ceiling)
+
+
 def apply_cold_start(model, clubs):
     """Promoted clubs have no rating in the window. Give them the empirically-calibrated
     newly-promoted prior (see COLD_* above), NOT a league-average or bottom-3 prior — and
@@ -339,13 +368,13 @@ def apply_cold_start(model, clubs):
     for c in clubs:
         i = idx[c]
         n = float(wm[i]) if i < len(wm) else 0.0
-        if n >= PROVISIONAL_N:
-            continue
-        provisional.add(c)
-        if n > 0:
-            w = n / (n + COLD_K)
-            model["attack"][i] = w * model["attack"][i] + (1 - w) * COLD_ATTACK
-            model["defense"][i] = w * model["defense"][i] + (1 - w) * COLD_DEFENSE
+        w = cold_start_weight(n)
+        if w >= 1.0:
+            continue                     # fully established: rating used as fitted
+        if n < PROVISIONAL_N:
+            provisional.add(c)           # label is about evidence, not about being shrunk
+        model["attack"][i] = w * model["attack"][i] + (1 - w) * COLD_ATTACK
+        model["defense"][i] = w * model["defense"][i] + (1 - w) * COLD_DEFENSE
     return model, provisional
 
 

@@ -1271,3 +1271,70 @@ team xG for the live season, both already collected.
 API-Football still adds what FPL genuinely lacks — per-player raw shots, key passes, dribbles,
 duels, touches in box — which matters for refining *scorer* shares later. It is an
 enhancement, not a prerequisite. `apifootball.py` stays, unwired, until it is needed.
+
+## Rule 41 — evidence is not likelihood weight, and shrinkage must not have a cliff
+
+Found by an independent audit (Codex, 2026-09-22) and reproduced here before changing anything.
+
+### Bug 1 — the evidence count was inflated 5.87x
+
+`dc.fit()` divides the recency weights by their own mean so the optimiser sees weights
+averaging 1. That is correct for the likelihood and meaningless as a count — and the same
+normalised weights were then summed as `weighted_matches`:
+
+```
+normalisation multiplier  5.8685x        (audit reported 5.868478968011276 — exact match)
+
+team        real matches   measured as   shrink weight
+Hull                   5         28.47           0.655
+Coventry               5         28.47           0.655
+Arsenal              304        303.76           0.953
+```
+
+So a promoted club with **five** games was treated as having **28** and kept **65.5%** of its
+fitted rating where the rule intends ~24%. The guardrail was running about **2.7x weaker than
+designed**, and it scaled with the window — a longer history would have weakened it further.
+
+Fixed by measuring evidence on the **raw, unnormalised** weights, which are scale-invariant.
+`kish_ess` (Kish effective sample size) and `raw_matches` are now reported alongside. Hull's
+five games measure 4.85 weighted / 5.00 ESS.
+
+### Bug 2 — a 27-point discontinuity at an arbitrary threshold
+
+`apply_cold_start` skipped any club at or above `PROVISIONAL_N`. A club at 39.9 evidence kept
+**72.7%** of its rating; at 40.0 it kept **100%**. One ordinary result could move a club across
+that line and jolt its price.
+
+Shrinkage is now continuous — the same curve rescaled to reach exactly 1.0 at the threshold:
+
+```
+w(n) = [n/(n+K)] / [N/(N+K)]  for n < N,  else 1.0
+
+n:     0     1     2     5    10    15    20    30    39  39.9    40   100
+w:  0.00  0.09  0.16  0.34  0.55  0.69  0.79  0.92  0.99  0.999  1.00  1.00
+```
+
+The step at the threshold is now **0.001**, was **0.273**. Established clubs are untouched by
+construction.
+
+### Validation — passes the gate, and is NOT an accuracy claim
+
+Walk-forward, refitting before every matchday exactly as Rule 1 does live, 223 matchdays
+(2024-08-16 .. 2026-05-24), 760 predictions:
+
+| | n | RPS |
+|---|---|---|
+| old (cliff, inflated evidence) | 760 | 0.2068 |
+| **new (continuous, raw evidence)** | 760 | **0.2065** |
+
+Difference +0.00027, **t = +1.20 clustered by matchday — not significant**. On thin-data
+fixtures only (n=209): 0.1820 -> 0.1810, +0.00100.
+
+It does not degrade, which is the bar for a correctness fix. It is **not** an accuracy
+improvement and must not be described as one — the original K sweep found t=0.83 and
+correcting the scale does not change that. What it fixes is a guardrail that was
+quantifiably weaker than its own documentation claimed.
+
+**Live effect:** provisional clubs went from 2 (Coventry, Hull) to 5, adding Ipswich, Leeds
+and Sunderland — yo-yo clubs whose evidence genuinely is thin inside an 8-year window once it
+is measured honestly.

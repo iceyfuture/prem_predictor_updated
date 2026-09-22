@@ -150,9 +150,33 @@ def fit(cutoff=None, maxiter=500, verbose=True, extra=None):
             yt[ok] = (1 - b) * y[ok] + b * as_[ok] * k
             shots_used = int(ok.sum())
 
-    # count each team's recency-weighted matches (for the report)
+    # RULE 41: LIKELIHOOD WEIGHTING AND EVIDENCE MEASUREMENT ARE DIFFERENT THINGS.
+    #
+    # `w` above was divided by its own mean so the optimiser sees weights averaging 1. That is
+    # correct for the fit and meaningless as a count: the divisor is 1/mean(w) = 5.87 on the
+    # current window, so summing the NORMALISED weights multiplied every club's apparent
+    # evidence by 5.87. Hull's five real matches measured as 28.47.
+    #
+    # That fed apply_cold_start's shrinkage, w = n/(n+K) with K=15, so a promoted club with
+    # five games received 28.47/(28.47+15) = 0.655 of its fitted rating where the rule intends
+    # 4.85/(4.85+15) = 0.244. The guardrail was running roughly 2.7x weaker than designed, and
+    # it scaled with the window - a longer history would have weakened it further.
+    #
+    # Two separate numbers from here on:
+    #   weighted_matches  raw, unnormalised recency weight - scale-invariant, and ~= the match
+    #                     count when the games are recent (Hull: 5 games -> 4.85)
+    #   kish_ess          Kish effective sample size, (sum w)^2 / sum(w^2) - how many
+    #                     equally-weighted matches this evidence is worth once spread over
+    #                     time is accounted for
+    # Both are reported; shrinkage consumes `weighted_matches`.
+    w_raw = time_weights(df.date, cutoff)          # the same weights, BEFORE normalisation
     wm = np.zeros(n)
-    np.add.at(wm, hi, w); np.add.at(wm, ai, w)
+    np.add.at(wm, hi, w_raw); np.add.at(wm, ai, w_raw)
+    w_sq = np.zeros(n)
+    np.add.at(w_sq, hi, w_raw ** 2); np.add.at(w_sq, ai, w_raw ** 2)
+    kish = np.divide(wm ** 2, w_sq, out=np.zeros_like(wm), where=w_sq > 0)
+    raw_n = np.zeros(n)
+    np.add.at(raw_n, hi, 1.0); np.add.at(raw_n, ai, 1.0)
 
     m00 = (x == 0) & (y == 0); m01 = (x == 0) & (y == 1)
     m10 = (x == 1) & (y == 0); m11 = (x == 1) & (y == 1)
@@ -190,6 +214,7 @@ def fit(cutoff=None, maxiter=500, verbose=True, extra=None):
     d = res.x[n:2 * n]; d = d - d.mean()
     model = dict(teams=teams, attack=a.tolist(), defense=d.tolist(),
                  weighted_matches=wm.tolist(),
+                 kish_ess=kish.tolist(), raw_matches=raw_n.tolist(),
                  home_adv=float(res.x[2 * n]), rho=float(res.x[2 * n + 1]),
                  cutoff=str(cutoff.date()), n_matches=int(len(df)),
                  window_years=WINDOW_YEARS, decay_base=DECAY_BASE,
