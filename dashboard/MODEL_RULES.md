@@ -1721,3 +1721,98 @@ all (`Bruno G.`, `Enzo`, `Andrés`). Doing the join at build time removes the wh
 failure for every future row. Historical rows keep a blank `p_score_shown` and are excluded
 from that metric rather than backfilled — reconstructing a displayed number after the fact is
 retrodiction, and Rule 42 exists precisely to stop that.
+
+## Rule 49 — the evidence page was evidence for a model nobody was running
+
+Audit finding §1. There were **two** Dixon-Coles implementations, and they had drifted.
+
+`prem_dixon_coles.fit/predict` makes the predictions the site displays. `validate.fit_dc/
+probs` — a separate copy — produced `backtest.json`, the page the site introduces as "the
+evidence behind every edge" and links from every edge signal. They differed in five ways:
+
+```
+                        production          validate.py (published the evidence)
+  decay_span            3.0                 4.0
+  ridge                 8.0                 2.0
+  AWAY_CAL              1.08                not applied at all
+  cold-start prior      calibrated promoted bottom-3 mean of attack+defense
+  supremacy blend       0.75 / 0.25         none — Dixon-Coles only
+```
+
+`build_backtest.py` added a third partial copy on top, reimplementing the lambda/mu
+arithmetic inline.
+
+The detail that makes this more than an oversight: production's own comment reads
+*"span/ridge chosen by out-of-sample sweep in validate.py (2016-26): span3+ridge8 gave RPS
+0.2056 vs the old span4+ridge2 (0.2061)"*. The sweep ran, production moved to the winner,
+and validate's defaults stayed on the loser — which then kept publishing the evidence. The
+sweep's own report labelled `span 4.0` and `ridge 2.0` as `<- SHIPPED` for months after they
+were not.
+
+### What the drift actually cost
+
+Measured over 3,800 fixtures and 10 seasons, adding each divergence one at a time:
+
+```
+configuration                         RPS    Brier   logloss     acc  home bias  away bias
+PUBLISHED  (validate defaults)     0.2061   0.5894   0.9904   52.1%    -0.0313    -0.0884
+  + production decay_span 3.0      0.2059   0.5891   0.9903   52.5%    -0.0312    -0.0724
+  + production ridge 8.0           0.2056   0.5884   0.9888   52.5%    -0.0296    -0.0955
+  + production AWAY_CAL 1.08       0.2057   0.5886   0.9892   52.8%    -0.0296    -0.0008
+```
+
+On the headline the drift is worth 0.0004 RPS — nearly nothing. On **away-goal bias it is
+worth a factor of 100**: the page reported −0.0884 for a model whose real bias is −0.0008.
+`AWAY_CAL` exists for exactly that, and the published calibration chart was of a model that
+did not have it. A reader inspecting "predicted versus actual goals" to decide whether to
+trust the desk was reading a diagnostic of the wrong model.
+
+### The fix
+
+`forecast.py` is now the only pipeline. It holds the fit, the window/decay/ridge settings,
+the away calibration, the promoted-club shrinkage, the 75/25 blend, and the probability
+normalisation and rounding — everything §1 requires to be identical. Production and every
+backtest import it.
+
+* `validate.fit_dc`, `validate.probs` and `validate._pois` are **deleted**, not deprecated.
+  `build_backtest.walk_with_goals` no longer computes anything; it calls `V.walk_forward`.
+  `build_dashboard` no longer blends by hand or carries its own cold start — it re-exports
+  forecast's, so `B.apply_cold_start is F.apply_cold_start` is literally true and tested.
+* Hyperparameters are now arguments to the production `dc.fit`, defaulting to the deployed
+  constants. Sweeps can still vary them; nothing can silently run a different model. The
+  sweep's `<- SHIPPED` marker is computed from `dc.DECAY_SPAN`/`dc.RIDGE` instead of typed
+  in, so it cannot go stale again.
+* The evidence page's model label is **derived from the rows**, not hard-coded. If any
+  fixture fails to blend, the label says how many rather than claiming the deployed
+  forecast. Every walk-forward row carries a `blended` flag for the same reason.
+
+### The numbers moved, and the model did not
+
+```
+metric      published before   now (deployed pipeline)
+  RPS               0.2061            0.2022
+  logloss           0.9904            0.9777
+  Brier             0.5894            0.5814
+  accuracy           52.1%             53.3%
+  goals          —                    2.88 predicted vs 2.83 actual
+  vs market      +0.01488 RPS         +0.00952 RPS  [+0.00659, +0.01246]
+```
+
+**Read that carefully: nothing about the forecast changed.** Not one constant, not one
+weight. The deployed model was always this good; the page was under-reporting it by
+measuring a worse model and calling the result evidence. Reporting these as an improvement
+would be the same error in the opposite direction.
+
+The market conclusion is unchanged and now measured against the right model: the gap
+narrows from +0.01488 to +0.00952 RPS, and the 95% interval [+0.00659, +0.01246] still
+excludes zero comfortably. **Still no edge.**
+
+### What this does not fix
+
+The audit also asks for nested chronological validation — hyperparameters chosen inside an
+earlier period and evaluated on a later outer holdout. That is not done. `span3/ridge8` was
+selected by a sweep over 2016-26 and the headline above is reported on those same seasons,
+so the headline is mildly optimistic by an unmeasured amount. The honest reading of
+`backtest.json` today is *"strictly walk-forward per season, but two hyperparameters were
+chosen with knowledge of the whole window."* Stated here rather than buried, and left as the
+next piece of work.

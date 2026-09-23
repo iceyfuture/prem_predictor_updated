@@ -25,6 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT); sys.path.insert(0, HERE)
 
+import forecast as F                 # noqa: E402
 import prem_dixon_coles as dc          # noqa: E402
 import supremacy_odds as so            # noqa: E402
 import prem_scorer as ps               # noqa: E402
@@ -338,90 +339,17 @@ def match_log():
 # "bottom-3 of last season" prior was far too generous (bottom-3 are relegation-quality but
 # PL-experienced) and let promoted teams look like value plays vs strong sides. These attack/
 # defense values reproduce that GF/GA against average opposition given home_adv~0.24.
-COLD_ATTACK = -0.12
-COLD_DEFENSE = -0.32
-
-# Evidence shrinkage for thin-data clubs: w = n_eff/(n_eff + COLD_K) toward the COLD_* prior.
-# Swept walk-forward with per-matchday refits over 14 seasons (sweep_coldstart.py). Overall
-# RPS is unchanged to 4dp at every K (established clubs have n_eff in the hundreds, so they
-# never move); on thin-data fixtures K=15-25 was best but only n=163 such fixtures exist and
-# the paired t is 0.83 — NOT significant. Shipped as a guardrail against the Hull pathology,
-# NOT as an accuracy improvement. PROVISIONAL_N keeps Rule 4's flags on until a club has
-# roughly a season of weighted evidence.
-COLD_K = 15.0
-PROVISIONAL_N = 40.0
-
-
-def cold_start_weight(n):
-    """How much of a club's own fitted rating to keep, given `n` matches of evidence.
-
-    RULE 41 (second half). The old rule had a CLIFF: shrink by n/(n+15) below 40 evidence
-    units, and not at all at or above it. A club at 39.9 kept 72.7% of its rating and one at
-    40.0 kept 100% - a 27-point discontinuity at an arbitrary line, so one ordinary result
-    could flip a club's price hard in either direction.
-
-    Now continuous. The same n/(n+K) curve is rescaled so it reaches exactly 1.0 at
-    PROVISIONAL_N and stays there:
-
-        w(n) = [n/(n+K)] / [N/(N+K)]   for n < N,   1.0 otherwise
-
-    No jump anywhere, established clubs are untouched by construction, and thin clubs are
-    shrunk harder than before because the measurement bug that was inflating their evidence
-    5.87x is gone. On the corrected scale: 0 matches -> 0.00, 5 -> 0.34, 17 -> 0.72,
-    40+ -> 1.00.
-
-    This is a GUARDRAIL, not a validated accuracy gain - see MODEL_RULES.md. The original
-    K sweep found t=0.83, not significant, and correcting the scale does not change that.
-    """
-    if n <= 0:
-        return 0.0
-    if n >= PROVISIONAL_N:
-        return 1.0
-    ceiling = PROVISIONAL_N / (PROVISIONAL_N + COLD_K)
-    return min(1.0, (n / (n + COLD_K)) / ceiling)
-
-
-def apply_cold_start(model, clubs):
-    """Promoted clubs have no rating in the window. Give them the empirically-calibrated
-    newly-promoted prior (see COLD_* above), NOT a league-average or bottom-3 prior — and
-    keep shrinking them toward it until they have actually earned a rating.
-
-    Why the shrink exists: Rule 1 refits after every matchday, so a club with no history in
-    the 8-year window gets a FULL-STRENGTH rating off its first result. In 26/27 Hull beat
-    Man United 2-0 in MW1 and came out with the best defence in the league, rated 4th
-    overall on one game — and because it was no longer "missing" it also lost its
-    provisional flag, switching off every Rule 4 guardrail exactly when they mattered most.
-
-    Shrinkage: w = n_eff/(n_eff + COLD_K) on the model's own time-weighted match count, so
-    established clubs (n_eff in the hundreds) are untouched and only thin-data clubs move.
-    See MODEL_RULES.md — this is a GUARDRAIL, not a validated accuracy gain.
-    """
-    idx = {t: i for i, t in enumerate(model["teams"])}
-    provisional = set()
-
-    # (1) never seen in the window -> pure prior
-    for c in [c for c in clubs if c not in idx]:
-        model["teams"].append(c)
-        model["attack"].append(COLD_ATTACK)
-        model["defense"].append(COLD_DEFENSE)
-        if isinstance(model.get("weighted_matches"), list):
-            model["weighted_matches"].append(0.0)
-        provisional.add(c)
-
-    # (2) rated but thin -> shrink toward the prior by how much evidence there actually is
-    idx = {t: i for i, t in enumerate(model["teams"])}
-    wm = model.get("weighted_matches") or []
-    for c in clubs:
-        i = idx[c]
-        n = float(wm[i]) if i < len(wm) else 0.0
-        w = cold_start_weight(n)
-        if w >= 1.0:
-            continue                     # fully established: rating used as fitted
-        if n < PROVISIONAL_N:
-            provisional.add(c)           # label is about evidence, not about being shrunk
-        model["attack"][i] = w * model["attack"][i] + (1 - w) * COLD_ATTACK
-        model["defense"][i] = w * model["defense"][i] + (1 - w) * COLD_DEFENSE
-    return model, provisional
+# RULE 49 (audit §1): the promoted-club prior, the evidence shrinkage and the cold-start
+# application now live in forecast.py, the single pipeline production and every backtest
+# share. They are re-exported here because this module's public names are part of the
+# interface (the dashboard tests import B.cold_start_weight, B.apply_cold_start and the
+# COLD_* constants). One implementation, several names for it -- never two implementations.
+COLD_ATTACK = F.COLD_ATTACK
+COLD_DEFENSE = F.COLD_DEFENSE
+COLD_K = F.COLD_K
+PROVISIONAL_N = F.PROVISIONAL_N
+cold_start_weight = F.cold_start_weight
+apply_cold_start = F.apply_cold_start
 
 
 def top_scores(model, h, a, k=3):
@@ -1122,15 +1050,15 @@ def build():
         matches = []
         for e in wk["fixtures"]:
             h, a = e["home"], e["away"]
-            dp = dc.predict(model, h, a)
-            dcp = np.array([dp["win_h"], dp["draw"], dp["win_a"]])
+            # RULE 49: one pipeline. The blend, the normalisation and the rounding are
+            # forecast.forecast(), which every backtest calls too, so the evidence page
+            # cannot drift away from the numbers on the card again.
+            fc = F.forecast(model, h, a, form=form, mapping=mapping, weights=(wdc, wsup))
+            dp = fc
+            p = fc["p"]
             hf, af = form.get(h, 0), form.get(a, 0)
             hfn, afn = form_n.get(h, 0), form_n.get(a, 0)
-            sp = np.array(so.probs_from_rating(mapping, hf - af))
-            p = wdc * dcp + wsup * sp
-            p = p / p.sum()
-            ph, pd_, pa = [round(float(x) * 100) for x in p]
-            ph += 100 - (ph + pd_ + pa)
+            ph, pd_, pa = fc["pct"]
             cold_pair = (h in cold or a in cold)
             priced = bool(e["odds"])
             vig = e["odds"]["overround"] if priced else None

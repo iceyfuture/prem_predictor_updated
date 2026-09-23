@@ -84,30 +84,41 @@ OUT = os.path.join(HERE, "backtest.json")
 FIRST = "2016-17"
 
 
+def _model_label(out):
+    """Name what was actually measured, from the rows themselves.
+
+    A hard-coded label is how the evidence page came to describe a model it was not
+    running. If any row failed to blend, say so rather than claiming the deployed forecast.
+    """
+    import forecast as _F
+    if not len(out) or "blended" not in out.columns or not out.blended.any():
+        return "Dixon-Coles only (out-of-sample)"
+    wdc, wsup = _F.blend_weights()
+    if out.blended.all():
+        return f"Deployed forecast: Dixon-Coles {wdc:g} x supremacy-form {wsup:g} (out-of-sample)"
+    return (f"Dixon-Coles {wdc:g} x supremacy-form {wsup:g}, "
+            f"{int((~out.blended).sum())} of {len(out)} rows unblended (out-of-sample)")
+
+
 def walk_with_goals(df, test):
-    """Like validate.walk_forward but also records model expected goals (lam, mu)."""
-    rows = []
-    for s in test:
-        te = df[df.season == s]
-        if te.empty:
-            continue
-        m = V.fit_dc(df, te.date.min())
-        active = m["wmatches"] > 20
-        order = np.argsort(m["attack"] + m["defense"])
-        b3 = [k for k in order if active[k]][:3]
-        cold = (float(m["attack"][b3].mean()), float(m["defense"][b3].mean()))
-        for r in te.itertuples(index=False):
-            i, j = m["idx"].get(r.home_team), m["idx"].get(r.away_team)
-            ah, dh = (m["attack"][i], m["defense"][i]) if i is not None else cold
-            aa, da = (m["attack"][j], m["defense"][j]) if j is not None else cold
-            lam = float(np.exp(ah - da + m["home_adv"]))
-            mu = float(np.exp(aa - dh))
-            ph, pd_, pa = V.probs(m, r.home_team, r.away_team, cold)
-            rows.append(dict(season=s, date=r.date, home=r.home_team, away=r.away_team,
-                             hs=int(r.home_score), as_=int(r.away_score),
-                             ph=ph, pd=pd_, pa=pa, lam=lam, mu=mu,
-                             cold=(i is None or j is None)))
-    return pd.DataFrame(rows)
+    """RULE 49: the deployed pipeline, walked forward. No second model lives here.
+
+    This used to be a third hand-rolled Dixon-Coles -- it reimplemented the lambda/mu
+    arithmetic inline, called validate's drifted `fit_dc`/`probs`, applied a bottom-3
+    cold-start prior instead of the calibrated one, left out AWAY_CAL and never blended
+    supremacy form. It produced backtest.json: the page the site calls "the evidence
+    behind every edge". It was evidence for a model nobody was running.
+    """
+    mapping = form_by_match = None
+    try:
+        mapping, form_by_match = V.supremacy_inputs(df[df.season == test[0]].date.min())
+    except Exception as e:
+        print(f"  ! supremacy inputs unavailable ({e}); measuring Dixon-Coles alone")
+    out = V.walk_forward(df, test, mapping=mapping, form_by_match=form_by_match)
+    if len(out):
+        out["hs"] = out.hs.astype(int)
+        out["as_"] = out.as_.astype(int)
+    return out
 
 
 def main():
@@ -123,7 +134,7 @@ def main():
     base = np.tile(O.mean(0), (len(out), 1))
 
     headline = [
-        {"model": "Dixon-Coles (out-of-sample)", "n": len(out), "rps": round(V.rps(P, O), 4),
+        {"model": _model_label(out), "n": len(out), "rps": round(V.rps(P, O), 4),
          "logloss": round(V.logloss(P, O), 4), "brier": round(V.brier(P, O), 4), "acc": round(V.acc(P, O), 4)},
         {"model": "Base-rate baseline", "n": len(out), "rps": round(V.rps(base, O), 4),
          "logloss": round(V.logloss(base, O), 4), "brier": round(V.brier(base, O), 4), "acc": round(V.acc(base, O), 4)},

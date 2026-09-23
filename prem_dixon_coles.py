@@ -90,7 +90,7 @@ SHOT_COLS = ["home_shots", "away_shots"]
 SHOT_BLEND = 0.0
 
 
-def load_matches(cutoff=None, extra=None):
+def load_matches(cutoff=None, extra=None, window_years=None):
     df = pd.read_csv(DATA)
     keep = COLS + [c for c in SHOT_COLS if c in df.columns]
     df = df[df.home_score.notna() & df.away_score.notna()][keep].copy()
@@ -108,19 +108,34 @@ def load_matches(cutoff=None, extra=None):
     if cutoff is None:
         cutoff = df.date.max() + pd.Timedelta(days=1)   # predict the "next" fixtures
     cutoff = pd.Timestamp(cutoff)
-    lo = cutoff - pd.Timedelta(days=365.25 * WINDOW_YEARS)
+    lo = cutoff - pd.Timedelta(days=365.25 * (WINDOW_YEARS if window_years is None
+                                               else window_years))
     df = df[(df.date < cutoff) & (df.date >= lo)].reset_index(drop=True)
     return df, cutoff
 
 
-def time_weights(dates, cutoff):
+def time_weights(dates, cutoff, decay_base=None, decay_span=None):
     age = (cutoff - dates).dt.days.values / 365.25
-    return DECAY_BASE ** (-age / DECAY_SPAN)
+    return (DECAY_BASE if decay_base is None else decay_base) ** (
+        -age / (DECAY_SPAN if decay_span is None else decay_span))
 
 
-def fit(cutoff=None, maxiter=500, verbose=True, extra=None):
+def fit(cutoff=None, maxiter=500, verbose=True, extra=None,
+        window_years=None, decay_base=None, decay_span=None, ridge=None):
+    """Fit at `cutoff` using only matches strictly before it.
+
+    The four hyperparameters default to this module's constants -- the deployed settings --
+    so a caller that passes nothing gets exactly the production model. They are overridable
+    ONLY so a sweep can measure alternatives (see validate.report_sweep); production and
+    every backtest leave them alone. Before RULE 49 a second copy of this fit lived in
+    validate.py with different defaults, and the sweep's loser was publishing the evidence.
+    """
     from scipy.optimize import minimize
-    df, cutoff = load_matches(cutoff, extra=extra)
+    window_years = WINDOW_YEARS if window_years is None else window_years
+    decay_base = DECAY_BASE if decay_base is None else decay_base
+    decay_span = DECAY_SPAN if decay_span is None else decay_span
+    ridge = RIDGE if ridge is None else ridge
+    df, cutoff = load_matches(cutoff, extra=extra, window_years=window_years)
     teams = sorted(set(df.home_team) | set(df.away_team))
     idx = {t: i for i, t in enumerate(teams)}
     n = len(teams)
@@ -129,7 +144,7 @@ def fit(cutoff=None, maxiter=500, verbose=True, extra=None):
     ai = df.away_team.map(idx).values
     x = df.home_score.astype(int).values
     y = df.away_score.astype(int).values
-    w = time_weights(df.date, cutoff)
+    w = time_weights(df.date, cutoff, decay_base=decay_base, decay_span=decay_span)
     w = w / w.mean()
 
     # RULE 37: the Poisson target may blend in shot-implied goals. The tau correction below
@@ -169,7 +184,8 @@ def fit(cutoff=None, maxiter=500, verbose=True, extra=None):
     #                     equally-weighted matches this evidence is worth once spread over
     #                     time is accounted for
     # Both are reported; shrinkage consumes `weighted_matches`.
-    w_raw = time_weights(df.date, cutoff)          # the same weights, BEFORE normalisation
+    w_raw = time_weights(df.date, cutoff, decay_base=decay_base, decay_span=decay_span)
+    # the same weights the likelihood uses, BEFORE normalisation (RULE 41)
     wm = np.zeros(n)
     np.add.at(wm, hi, w_raw); np.add.at(wm, ai, w_raw)
     w_sq = np.zeros(n)
@@ -195,7 +211,7 @@ def fit(cutoff=None, maxiter=500, verbose=True, extra=None):
         tau[m10] = 1.0 + mu[m10] * rho
         tau[m11] = 1.0 - rho
         ll = ll + np.log(np.clip(tau, 1e-9, None))
-        return -np.sum(w * ll) + RIDGE * (a @ a + d @ d)
+        return -np.sum(w * ll) + ridge * (a @ a + d @ d)
 
     x0 = np.zeros(2 * n + 2)
     x0[2 * n] = 0.25
@@ -217,8 +233,8 @@ def fit(cutoff=None, maxiter=500, verbose=True, extra=None):
                  kish_ess=kish.tolist(), raw_matches=raw_n.tolist(),
                  home_adv=float(res.x[2 * n]), rho=float(res.x[2 * n + 1]),
                  cutoff=str(cutoff.date()), n_matches=int(len(df)),
-                 window_years=WINDOW_YEARS, decay_base=DECAY_BASE,
-                 decay_span=DECAY_SPAN, ridge=RIDGE,
+                 window_years=window_years, decay_base=decay_base,
+                 decay_span=decay_span, ridge=ridge,
                  shot_blend=SHOT_BLEND, shot_rows=shots_used,
                  date_min=str(df.date.min().date()), date_max=str(df.date.max().date()))
     if verbose:
