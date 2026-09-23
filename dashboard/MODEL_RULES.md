@@ -1861,3 +1861,52 @@ That is the third frozen number found in this page in two days (Rule 46's `RPS 0
 0.1953`, Rule 49's `<- SHIPPED` sweep labels, and this). The pattern is worth naming: **a
 number typed into a template is a claim that nothing will ever re-check.** Anything the page
 asserts about its own evidence should be read from the evidence.
+
+## Rule 51 — "Arsenal|Chelsea" is not a key, and a forecast should say what produced it
+
+Audit finding §2, the two requirements left over when Rule 42 closed the kickoff hole.
+
+### The key
+
+Ledger rows were keyed `home|away`. Arsenal play Chelsea every season, so next August the
+2027/28 fixture would hash to the same key as this season's, find it already present, and be
+skipped as "already locked" — silently, with no error and no new row. The ledger currently
+holds exactly one season (380 rows), so **nothing has been lost yet**. This is a latent bug
+fixed before it fires rather than discovered afterwards from a season of missing forecasts.
+
+Keys are now `season|#provider_fixture_id`, falling back to `season|home|away` when the feed
+gives no id. The provider id is preferred because it survives the two things the name pair
+does not: a club renaming, and a fixture moving date for a TV pick.
+
+Migration is idempotent, leaves every forecast, timestamp and grade untouched, and writes
+`ledger.csv.pre-rule51.bak` once before the first pass. Verified on a copy: 380 rows in, 380
+out, zero non-key fields altered, second pass a no-op.
+
+**One trap worth recording.** The migration can only key by name, because old rows have no
+`fixture_id`. The next build *does* know the id, computes `2026/27|#5795363`, misses the
+migrated `2026/27|Arsenal|Coventry`, and locks a second row for every fixture in the league —
+all 380 of them stamped `pred_at=now`, every one a retrodiction. The writer therefore looks
+for the legacy key before it concludes a fixture is new, adopts that row and rekeys it in
+place. Found by testing the migration rather than by reading it.
+
+### The provenance
+
+Every forecast now stores what produced it:
+
+```
+code_commit      5006b66+dirty      short git rev; +dirty when the tree has edits, because
+                                    a forecast from an edited tree is not reproducible
+model_config     dc:w8,b8,s3,r8,away1.08,blend0.75/0.25,cold15/40
+training_cutoff  2026-09-01         the fit saw nothing on or after this date
+data_version     2026-05-24:3010    last training match : matches used
+```
+
+Without this, a row locked before a settings change is indistinguishable from one locked
+after, and the two get averaged into a single "forward test" as though they came from the
+same model. Rule 49 is the reason this matters concretely: the evidence layer ran a
+different configuration from production for months and nothing in the data said so. These
+four strings are what would have said so.
+
+They are stamped on the opening lock and only ever `setdefault`-ed afterwards, so a locked
+row keeps the provenance it was born with. `+dirty` is not cosmetic — it is the difference
+between "this commit reproduces this number" and "something close to this commit might".

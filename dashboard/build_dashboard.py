@@ -16,7 +16,7 @@ EDGES: where a book has priced a game, edge = model EV against the vig-free line
 
 RUN:  ~/prem_predictor/.venv/bin/python dashboard/build_dashboard.py
 """
-import csv, json, math, os, sys
+import csv, json, math, os, re, shutil, sys
 from datetime import datetime, timezone, timedelta
 
 import numpy as np
@@ -344,6 +344,8 @@ def match_log():
 # share. They are re-exported here because this module's public names are part of the
 # interface (the dashboard tests import B.cold_start_weight, B.apply_cold_start and the
 # COLD_* constants). One implementation, several names for it -- never two implementations.
+# RULE 51 fallback only: used when a fixture carries no absolute kickoff to derive from.
+CURRENT_SEASON = F.season_of(datetime.now(timezone.utc))
 COLD_ATTACK = F.COLD_ATTACK
 COLD_DEFENSE = F.COLD_DEFENSE
 COLD_K = F.COLD_K
@@ -750,7 +752,49 @@ def _ko_utc(m):
     return None
 
 
-def record_ledger(weeks, built_at):
+def _migrate_keys(rows, path):
+    """RULE 51: upgrade pre-season-aware ledger rows in place. Safe, idempotent, backed up.
+
+    Old keys were `home|away`; new ones are `season|home|away`, or `season|#fixture_id` when
+    the provider gave one. A row is migrated only if its key has no season prefix, so running
+    this twice changes nothing. The season comes from the row's own `kickoff_utc`, which is
+    an absolute instant, and a row without one is left exactly as it is rather than guessed
+    at. `key` is derived data, not a forecast: no probability, timestamp or grade is touched.
+
+    A backup is written next to the ledger before the first migration and never overwritten.
+    """
+    old = [k for k in rows if "|" in k and not re.match(r"^\d{4}/\d{2}\|", k)]
+    if not old:
+        return rows
+    bak = path + ".pre-rule51.bak"
+    if not os.path.exists(bak):
+        shutil.copy2(path, bak)
+        print(f"  RULE 51: backed up {os.path.basename(path)} -> {os.path.basename(bak)}")
+    out, moved, skipped = {}, 0, 0
+    for k, r in rows.items():
+        if k not in old:
+            out[k] = r
+            continue
+        ko = (r.get("kickoff_utc") or "").strip()
+        if not ko:
+            out[k] = r                      # no absolute instant: leave it alone
+            skipped += 1
+            continue
+        season = F.season_of(ko)
+        nk = F.fixture_key(season, r.get("home", ""), r.get("away", ""), r.get("fixture_id"))
+        if nk in out:                       # a genuine collision: keep the earlier lock
+            skipped += 1
+            out[k] = r
+            continue
+        r["key"], r["season"] = nk, season
+        out[nk] = r
+        moved += 1
+    print(f"  RULE 51: migrated {moved} ledger key(s) to season-aware form"
+          + (f", left {skipped} unchanged" if skipped else ""))
+    return out
+
+
+def record_ledger(weeks, built_at, model=None):
     """RULE 5 + Kalshi forward test.
 
     Per fixture we log THREE forecasts and freeze them at kickoff:
@@ -767,10 +811,29 @@ def record_ledger(weeks, built_at):
     if os.path.exists(path):
         for r in read_csv(path):
             rows[r["key"]] = r
+        rows = _migrate_keys(rows, path)
+    prov = F.provenance(model)
     for w in weeks:
         for m in w["matches"]:
-            key = f"{m['home']}|{m['away']}"   # stable: kickoff times move with TV picks
-            rec = rows.get(key, {})
+            # RULE 51: season + the provider's fixture id. "Arsenal|Chelsea" is not a key --
+            # they play every season, so next year's row would collide with this year's and
+            # be skipped as already locked. One season is in the ledger, so nothing has been
+            # lost yet; this is fixed before it fires.
+            season = F.season_of(m.get("utc") or "") or CURRENT_SEASON
+            key = F.fixture_key(season, m["home"], m["away"], m.get("fixture_id"))
+            rec = rows.get(key)
+            if rec is None:
+                # A row locked before the provider id was recorded is keyed by name. Adopt
+                # and rekey it rather than treating this as a new fixture -- otherwise the
+                # first build after RULE 51 would lock a SECOND row for all 380 games and
+                # every one of them would be a retrodiction.
+                legacy = rows.pop(F.fixture_key(season, m["home"], m["away"]), None)
+                if legacy is not None:
+                    legacy["key"] = key
+                    legacy["fixture_id"] = m.get("fixture_id", "")
+                    rows[key] = legacy
+                    rec = legacy
+            rec = rec if rec is not None else {}
             k = m.get("kalshi")
             ko = _ko_utc(m)
             now_dt = datetime.fromisoformat(built_at.replace("Z", "+00:00"))
@@ -784,15 +847,24 @@ def record_ledger(weeks, built_at):
                 # (all 50 settled rows were predicted before the season), but the path was
                 # open. Such rows are still written, so the desk keeps a record of what it
                 # showed, and marked late=1 so every score excludes them.
-                rec = {"key": key, "gw": w["gw"], "home": m["home"], "away": m["away"],
+                rec = {"key": key, "season": season,
+                       "fixture_id": m.get("fixture_id", ""),
+                       "gw": w["gw"], "home": m["home"], "away": m["away"],
                        "kickoff": m["time"], "kickoff_utc": ko.isoformat() if ko else "",
                        "pred_at": built_at, "late": "1" if after_ko else "",
                        "pred_h": m["ph"], "pred_d": m["pd"], "pred_a": m["pa"],
-                       "result": "", "outcome": "", "graded": ""}
+                       "result": "", "outcome": "", "graded": "",
+                       # RULE 51: what produced this number. Without it a row from before a
+                       # settings change is silently comparable with one from after it.
+                       **prov}
                 if after_ko:
                     print(f"  ! LATE: {key} first seen at/after kickoff "
                           f"({ko:%Y-%m-%d %H:%M}) - recorded, excluded from scoring")
             rec.setdefault("late", "")
+            rec.setdefault("season", season)
+            rec.setdefault("fixture_id", m.get("fixture_id", ""))
+            for _k, _v in prov.items():
+                rec.setdefault(_k, _v)      # backfill only; a locked row keeps its own
             if ko:
                 # Follows a reschedule as well as backfilling an old row. Writing it
                 # unconditionally would be idempotent anyway (same value, same string), but a
@@ -1213,6 +1285,9 @@ def build():
             slug = f"{e['home_abbr']}-{e['away_abbr']}".lower()
             matches.append({
                 "id": slug, "home": h, "away": a,
+                # RULE 51: the PROVIDER's fixture id, kept so the ledger key survives a
+                # reschedule and a club rename. `id` above is a display slug and is not it.
+                "fixture_id": str(e.get("id") or ""),
                 "home_abbr": e["home_abbr"], "away_abbr": e["away_abbr"],
                 "home_color": e["home_color"], "away_color": e["away_color"],
                 "venue": e["venue"], "time": kt.strftime("%a %d %b %H:%M"),
@@ -1504,7 +1579,7 @@ def build():
         print(f"  played record: {len(r['matches'])} matches through GW{r['through_gw']}, "
               f"{len(r['players'])} standout player gameweeks")
 
-    data["settled"] = record_ledger(weeks, now.isoformat(timespec="minutes"))
+    data["settled"] = record_ledger(weeks, now.isoformat(timespec="minutes"), model=model)
     data["settled_props"] = record_props_ledger(weeks, now.isoformat(timespec="minutes"))
     with open(OUT, "w") as f:
         json.dump(data, f, separators=(",", ":"))

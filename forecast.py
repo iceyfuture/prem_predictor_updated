@@ -157,3 +157,91 @@ def forecast(model, home, away, form=None, mapping=None, weights=None, neutral=F
     return {"p": p, "pct": to_pct(p), "xg_h": dp["xg_h"], "xg_a": dp["xg_a"],
             "score": dp["score"], "score_p": dp["score_p"], "known": dp["known"],
             "blended": blended}
+
+
+# ---- forecast provenance (RULE 51, audit §2) -------------------------------------------
+def season_of(dt):
+    """Season label for a datetime/date/ISO string: '2026/27' for an August-2026 kickoff.
+
+    A Premier League season spans two calendar years, so the year alone is ambiguous and
+    July is the cut.
+    """
+    if isinstance(dt, str):
+        s = dt.strip()
+        if not s:
+            return ""
+        y, m = int(s[:4]), int(s[5:7])
+    else:
+        y, m = dt.year, dt.month
+    start = y if m >= 7 else y - 1
+    return f"{start}/{str(start + 1)[-2:]}"
+
+
+def fixture_key(season, home, away, fixture_id=None):
+    """A ledger key that survives a second season and a rescheduled kickoff.
+
+    `home|away` alone is not a key: Arsenal play Chelsea every year, so the second season's
+    row collides with the first and is silently skipped as "already locked". The ledger
+    currently holds exactly one season, so nothing has been lost yet -- this is a latent
+    bug, fixed before it fires rather than after.
+
+    A provider fixture id is preferred when available: it survives a club renaming and a
+    fixture moving date, which the team names and the kickoff do not.
+    """
+    fid = str(fixture_id or "").strip()
+    if fid:
+        return f"{season}|#{fid}"
+    return f"{season}|{home}|{away}"
+
+
+def code_version():
+    """Short git commit of the working tree, or '' when it cannot be determined.
+
+    Suffixed '+dirty' when there are uncommitted changes, because a forecast produced from
+    an edited tree is not reproducible from the commit alone and should not claim to be.
+    """
+    import subprocess
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        h = subprocess.run(["git", "-C", root, "rev-parse", "--short", "HEAD"],
+                           capture_output=True, text=True, timeout=10)
+        if h.returncode != 0:
+            return ""
+        rev = h.stdout.strip()
+        d = subprocess.run(["git", "-C", root, "status", "--porcelain"],
+                           capture_output=True, text=True, timeout=10)
+        return rev + ("+dirty" if d.returncode == 0 and d.stdout.strip() else "")
+    except Exception:
+        return ""
+
+
+def model_config(model=None):
+    """A short, stable string naming the configuration a forecast was produced with.
+
+    Recorded per forecast so a row from before a settings change is never silently
+    compared against one from after it.
+    """
+    wdc, wsup = blend_weights()
+    m = model or {}
+    parts = [f"dc:w{m.get('window_years', dc.WINDOW_YEARS):g}",
+             f"b{m.get('decay_base', dc.DECAY_BASE):g}",
+             f"s{m.get('decay_span', dc.DECAY_SPAN):g}",
+             f"r{m.get('ridge', dc.RIDGE):g}",
+             f"away{dc.AWAY_CAL:g}",
+             f"blend{wdc:g}/{wsup:g}",
+             f"cold{COLD_K:g}/{PROVISIONAL_N:g}"]
+    return ",".join(parts)
+
+
+def data_version(model=None):
+    """A fingerprint of the training data: its last date and how many matches were used."""
+    m = model or {}
+    return f"{m.get('date_max', '')}:{m.get('n_matches', '')}"
+
+
+def provenance(model=None):
+    """Everything a forecast needs to be reproducible later, as flat strings."""
+    return {"code_commit": code_version(),
+            "model_config": model_config(model),
+            "training_cutoff": str((model or {}).get("cutoff", "")),
+            "data_version": data_version(model)}
