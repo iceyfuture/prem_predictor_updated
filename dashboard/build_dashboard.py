@@ -1453,6 +1453,20 @@ def build():
     if _c["forecasts"]:
         print(f"  AI Council (display only): {_c['forecasts']} locked forecast(s) attached, "
               f"{_c['with_reasoning']} with saved reasoning")
+    # RULE 50 (audit §10): publish the Council's record so the page states its sample size
+    # instead of leaving a reader to infer one from a confident-looking panel. A handful of
+    # forecasts is not evidence, and the only way to make that obvious is to print the count
+    # next to the numbers.
+    try:
+        import council_ledger as _cl
+        data["council_record"] = _cl.summary()
+        _r = data["council_record"]
+        print(f"  council record: {_r['graded']} graded of {_r['valid']} valid "
+              f"({_r['late']} late, excluded) | council RPS {_r['council_rps']} "
+              f"vs model {_r['model_rps']} vs market {_r['market_rps']} (n={_r['market_n']})")
+    except Exception as _e:
+        data["council_record"] = None
+        print(f"  ! council record unavailable ({_e})")
 
     # RULE 44: declare what each store should hold, and what it actually does.
     _played = len([m for wk in data["weeks"] for m in wk.get("matches", []) if m.get("finished")])

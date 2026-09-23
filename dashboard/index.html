@@ -466,10 +466,10 @@
   <div id="sourceHealth"></div>
 <div class="not-advice" role="note">
   <b>Model view vs market view.</b> The percentages here are this desk&rsquo;s own model, shown
-  beside the market&rsquo;s. A disagreement is something to investigate, not an edge: measured
-  out-of-sample over 1,893 matches, blending this model toward the closing line improved its
-  score at <i>every</i> weight, and every apparent betting profit collapsed once its two
-  luckiest tickets were removed. <b>Nothing here is betting advice.</b>
+  beside the market&rsquo;s. A disagreement is something to investigate, not an edge:
+  out-of-sample, blending this model toward the closing line improved its score at
+  <i>every</i> weight, and every apparent betting profit collapsed once its two luckiest
+  tickets were removed. <span id="mktNote"></span> <b>Nothing here is betting advice.</b>
 </div>
 <footer><p class="note"><b>SOURCES:</b> <span id="srcNote"></span> &mdash; analytical view only, not a recommendation to bet.</p></footer>
 </main>
@@ -608,13 +608,41 @@ function councilDeltaRows(m){
   }).join('');
 }
 
+/* RULE 50 (audit §10): the Council's whole record, stated wherever it speaks.
+   A panel with four named analysts and a chairman reads as authority. The only honest
+   counterweight is the sample size printed beside it, every time. */
+function councilRecord(){
+  var r=DATA&&DATA.council_record;
+  if(!r||!r.graded){
+    var n=(r&&r.valid)||0;
+    return `<p class="panel-hint" style="color:var(--amber)"><b>Record: nothing graded yet.</b>
+      ${n} forecast${n===1?'':'s'} locked. Until these are settled the Council has produced
+      no evidence at all, and nothing here should be read as a track record.</p>`;
+  }
+  var cmp='';
+  if(r.council_rps!=null&&r.model_rps!=null){
+    var better=r.council_rps<r.model_rps;
+    cmp=` RPS <b>${r.council_rps.toFixed(4)}</b> against the statistical model's
+      <b>${r.model_rps.toFixed(4)}</b> on the same fixtures &mdash; the Council is
+      <b>${better?'ahead':'behind'}</b>`
+      +(r.market_rps!=null?`, and the market's <b>${r.market_rps.toFixed(4)}</b> on the
+      ${r.market_n} of those that were priced`:'')+'.';
+  }
+  return `<p class="panel-hint" style="color:var(--amber)">
+    <b>Record: ${r.graded} graded forecast${r.graded===1?'':'s'}</b>${r.late?` (${r.late} locked
+    after kickoff and excluded)`:''}.${cmp}
+    <b>This is far too small a sample to mean anything</b> &mdash; at this size the ordering
+    would change on a single result. It is shown so the number is visible, not because it
+    supports a conclusion.</p>`;
+}
 function councilBody(m){
   var c=m.council; if(!c) return '';
   var r=m.council_reasoning;
   var head=`<p class="panel-hint" style="color:var(--amber)"><b>Experimental AI Council</b>
       &mdash; tracked separately from the statistical model. It does not affect the model
       probabilities, edges, confidence tiers or any prop price on this page.
-      Locked ${esc(c.locked_at||'')}${c.late?' <b>after kickoff &mdash; not counted as a forward test</b>':''}.</p>`;
+      Locked ${esc(c.locked_at||'')}${c.late?' <b>after kickoff &mdash; not counted as a forward test</b>':''}.</p>`
+    +councilRecord();
 
   var finalCard=`<article class="council-seat council-chair">
       <header><span class="ci" aria-hidden="true">\u2696\uFE0F</span>
@@ -1109,7 +1137,7 @@ function analystContext(){
   L.push(
 '\nWHAT THE EVIDENCE LOG SAYS - you MUST respect these when answering:\n'+
 '  * On match outcomes the model does NOT beat the market. Blending it toward the closing line\n'+
-'    improved the score at every weight over 1,893 matches, all the way to 100% market. Do not\n'+
+'    improved the score at every weight, all the way to 100% market. '+marketEvidenceLine()+' Do not\n'+
 '    present a model-vs-market disagreement as an edge, and never tell the user to bet.\n'+
 '  * Every apparent betting profit collapsed once its two luckiest tickets were removed.\n'+
 '  * Promoted clubs (marked provisional) have almost no data; treat their numbers as weak.\n'+
@@ -1329,6 +1357,27 @@ function renderPicks(){
 }
 
 /* ---- backtest ---- */
+/* The sample size behind the "no edge" claim, read from the build instead of typed in.
+   The figure here used to say "1,893 matches" long after the window had changed. */
+/* The same figures, for the analyst's brief. Read from the build so the assistant can
+   never quote a sample size the page no longer has. */
+function marketEvidenceLine(){
+  var m=DATA&&DATA.backtest&&DATA.backtest.market;
+  if(!m||!m.n) return 'No graded market comparison is loaded, so make no claim about size.';
+  var s='Measured on '+m.n+' fixtures priced by the '+String(m.provider||'closing').replace(/_/g,' ')+' line';
+  if(m.paired&&m.paired.rps&&m.paired.rps.ci)
+    s+=' (paired RPS '+(m.paired.rps.diff>0?'+':'')+m.paired.rps.diff.toFixed(4)+
+       ', 95% CI '+m.paired.rps.ci[0].toFixed(4)+' to '+m.paired.rps.ci[1].toFixed(4)+
+       ', clustered by season)';
+  return s+'.';
+}
+function fillMarketNote(){
+  var el=$('mktNote'), m=DATA&&DATA.backtest&&DATA.backtest.market;
+  if(!el) return;
+  el.innerHTML = m&&m.n
+    ? `Measured on ${m.n} fixtures priced by the ${esc(String(m.provider||'closing').replace(/_/g,' '))} line.`
+    : '';
+}
 function renderBacktest(){
   const b=DATA.backtest;
   if(!b||!b.headline){$('btBody').innerHTML='<div class="banner">No backtest data in this build. Run <b>build_backtest.py</b> then rebuild.</div>';return;}
@@ -1504,7 +1553,7 @@ function applyHash(){const p=new URLSearchParams(location.hash.slice(1));
   const g=+p.get('gw');if(g>=1&&g<=DATA.weeks.length)gw=g;
   if(p.get('f'))gFilter=p.get('f');
   const mid=p.get('m');if(mid){showView('games');renderWeek(mid);}else renderWeek();}
-function boot(d){DATA=d;
+function boot(d){DATA=d;fillMarketNote();
   document.querySelectorAll('#tabs button').forEach(b=>b.addEventListener('click',()=>{showView(b.dataset.view);if(b.dataset.view==='games')location.hash=`gw=${gw}`;}));
   $('gwSel').replaceChildren(...d.weeks.map(w=>{const o=document.createElement('option');o.value=String(w.gw);o.textContent='Matchweek '+w.gw;return o}));
   $('gwSel').addEventListener('change',e=>{gw=+e.target.value;renderWeek();});

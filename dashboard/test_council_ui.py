@@ -230,6 +230,44 @@ def main():
     check("council_reasoning.jsonl byte-identical",
           lambda: _assert(_fp(B.COUNCIL_REASONING) == REASONING_BEFORE))
 
+    print("\n=== RULE 50 (audit §10): the Council states its own sample size ===")
+    import council_ledger as CL
+    rec = CL.summary()
+    check("the ledger produces a record", lambda: _assert(isinstance(rec, dict)))
+    for k in ("tracked", "valid", "graded", "late", "council_rps", "model_rps",
+              "market_rps", "market_n"):
+        check(f"record exposes {k}", lambda kk=k: _assert(kk in rec))
+    check("late rows are excluded from the graded count",
+          lambda: _assert(rec["valid"] + rec["late"] == rec["tracked"]))
+    check("the market mean carries its own n (RULE 33 denominator)",
+          lambda: _assert(rec["market_n"] <= rec["graded"]))
+    bd = open(os.path.join(HERE, "build_dashboard.py")).read()
+    check("the build publishes the record to the page",
+          lambda: _assert('data["council_record"] = _cl.summary()' in bd))
+    html = open(os.path.join(HERE, "index.html")).read()
+    check("the UI has a function to render it",
+          lambda: _assert("function councilRecord()" in html))
+    check("every Council panel shows the record, not just some",
+          lambda: _assert("+councilRecord();" in html))
+    check("it says plainly that the sample is too small",
+          lambda: _assert("far too small a sample" in html))
+    check("it reports the graded count, not the locked count",
+          lambda: _assert("r.graded" in html))
+    check("an ungraded Council says so rather than showing nothing",
+          lambda: _assert("nothing graded yet" in html))
+    check("the Council still cannot touch the model's probabilities",
+          lambda: _assert("does not affect the model" in html))
+
+    print("\n=== no frozen evidence figures in the page ===")
+    check("the not-advice notice no longer hard-codes a match count",
+          lambda: _assert("over 1,893 matches, blending" not in html))
+    check("it reads the count from the build instead",
+          lambda: _assert("function fillMarketNote()" in html and 'id="mktNote"' in html))
+    check("the analyst brief reads live figures too",
+          lambda: _assert("function marketEvidenceLine()" in html))
+    check("and refuses to state a size when none is loaded",
+          lambda: _assert("make no claim about size" in html))
+
     print(f"\n  {PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0
 

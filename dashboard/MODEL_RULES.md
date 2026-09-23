@@ -1816,3 +1816,48 @@ so the headline is mildly optimistic by an unmeasured amount. The honest reading
 `backtest.json` today is *"strictly walk-forward per season, but two hyperparameters were
 chosen with knowledge of the whole window."* Stated here rather than buried, and left as the
 next piece of work.
+
+## Rule 50 — the Council must state its own sample size, every time it speaks
+
+Audit finding §10. The Council was already display-only (Rule 38) and tested to be so: it
+cannot move a probability, a reliability tier, an edge label or a prop price. That half was
+already right.
+
+What was missing is the other half of §10: *"Clearly show its sample size and ungraded
+status."* The panel named four analysts, showed their individual probability splits, a
+consensus score and a chairman's verdict — and nowhere said that the whole thing rests on
+**three** graded forecasts. A panel that presents like an investment committee reads as
+authority no matter what the disclaimer says. The only honest counterweight is the count,
+printed beside the numbers, every time.
+
+`councilRecord()` now renders above every Council panel:
+
+```
+Record: 3 graded forecasts. RPS 0.2043 against the statistical model's 0.1903 on the
+same fixtures — the Council is behind, and the market's 0.1749 on the 2 of those that
+were priced. This is far too small a sample to mean anything — at this size the
+ordering would change on a single result.
+```
+
+It comes from `council_ledger.summary()`, which already excluded post-kickoff rows and
+already averaged the market over only the fixtures that had a price — the denominator care
+from Rule 33. With nothing graded it says so outright rather than rendering blank, because
+an absent record and a good record look identical if you print neither.
+
+The Council is currently **behind** the plain statistical model on all three graded
+fixtures. That is not a finding either; it is three matches. Both statements are on the
+page for the same reason.
+
+### Two frozen figures removed while checking this
+
+The "not betting advice" notice asserted the no-edge result was *"measured out-of-sample
+over 1,893 matches"*, and the analyst chatbot's brief told the assistant the same number as
+fact. The current comparison is 2,660 fixtures. The count had been stale through several
+changes of window and provider, and the chatbot would have repeated it to anyone who asked.
+Both now read `DATA.backtest.market` at render time, and the chatbot's line refuses to state
+a sample size at all when no graded comparison is loaded rather than guessing.
+
+That is the third frozen number found in this page in two days (Rule 46's `RPS 0.2061 vs
+0.1953`, Rule 49's `<- SHIPPED` sweep labels, and this). The pattern is worth naming: **a
+number typed into a template is a claim that nothing will ever re-check.** Anything the page
+asserts about its own evidence should be read from the evidence.
