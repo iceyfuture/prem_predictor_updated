@@ -1612,3 +1612,112 @@ dependency is never mistaken for a pass.
 The lesson is narrow and worth keeping: **a test suite that only imports Python can certify a
 completely broken website.** Anything that ships a browser artefact needs one check that the
 browser itself would have made.
+
+## Rule 48 — the scorer model said "impossible" 14 times in two weeks, and graded a different model than it showed
+
+Audit finding §7. Two defects, both reproduced before anything was changed.
+
+### Defect 1 — half the league could not be predicted to score
+
+`load_shares` set a player's share to `w_goals / sum(w_goals)` and dropped everyone with
+`w_goals <= 0`. Measured on the 2026/27 squads:
+
+```
+287 of 614 squad players (46.7%) had share exactly 0
+  of those, 129 had no Premier League minutes at all, and 22 were forwards
+worst-hit clubs: Hull 78.6%, Coventry 75.8%, Sunderland 60.6%
+```
+
+Promoted clubs are hit hardest, which is the opposite of what you want: the squads the model
+knows least about are the ones it speaks about most confidently. Across the two graded
+gameweeks, **14 of the 47 players who actually scored had been assigned a probability of
+exactly zero.** Brier treats that as a loss of 1.0. Log loss treats it as infinite, which is
+the honest reading — the model asserted the event could not happen.
+
+Concentration was the same failure from the other side. Hull's shares put 79.4% of the club's
+goals on one striker, not because he is dominant but because every team-mate was zero. With
+that striker marked out, the model kept team lambda unchanged and handed his 79% to whoever
+was left: a midfielder went from 11.8% to 45.6% anytime, purely because a colleague was
+injured.
+
+### Defect 2 — the forward test graded a pipeline nobody could see
+
+`player_ledger` computed its own `p_score = 1 - exp(-xg90 * xmin/90)` and its docstring
+claimed this "grades the same pipeline the dashboard displays". It does not. The dashboard
+displays `prem_scorer.match_scorers`, which is `1 - exp(-share * lambda)`. A third,
+different share was used inside `simulate_fpl` for FPL points. **Three scorer numbers, one
+codebase.** Over the graded gameweeks the ledger reported Brier 0.0395 while the figures
+actually on screen scored 0.0445 — the forward test was flattering the desk by 13%.
+
+Grading the displayed number needed a surname join, and that join is bad: 269 of 982 graded
+rows (27.4%) had no squad-file match, and five of twenty clubs did not join at all because
+the ledger says `Man Utd`/`Spurs`/`Hull City` where the squad file says `Man United`/
+`Tottenham`/`Hull`. That is presumably why the shortcut was taken.
+
+### The fix
+
+* **A rate, not a goal count.** `player_rate` is a gamma-Poisson posterior: recency-weighted
+  PL goals shrunk toward an empirical prior for the position, `(goals + K·prior)/(n90 + K)`.
+  Priors are measured, not chosen — goals per 90 in a player's *first* PL season over
+  2016-17..2025-26 (FWD 0.384, MID 0.143, DEF 0.047, GKP 0.000132, the last being one goal in
+  683,955 minutes: small, but not impossible). `K = 10` ninety-minute appearances is a round
+  shrinkage scale, not fitted to anything.
+* **Minutes are expected minutes, not past minutes.** The first attempt scaled each player by
+  his own historical PL minutes relative to his club's maximum. It looked reasonable and was
+  badly wrong: Hull's Oliver McBurnie, a proven forward with only 197 weighted PL minutes
+  after a spell outside the league, ranked *below* a team-mate who has never played in the
+  Premier League at all. Having a little evidence scored worse than having none. An estimator
+  must never do that, and there is now a test for it at three positions. Production passes
+  real expected minutes from `fpl_minutes`; the library default is position-typical minutes.
+* **One number, computed once.** `scorer_probs()` is the single source. The fixture card, the
+  FPL projection and the ledger all read it, so what is displayed is by construction what is
+  graded. `simulate_fpl.project_gw` captures it as `p_score_shown` at build time, where the
+  FPL id and the scorer model's player name are both in hand — no grading-time join.
+* **Blank is not zero.** A player the scorer model never priced stores `""`, not `0.0`. "We
+  did not price him" and "we priced him at nothing" are different claims and are not scored
+  alike. `TEAM_ALIAS`/`canon_team` fix the five-club mismatch.
+
+### Validation — and what it does NOT establish
+
+Both methods given the *same* pre-match expected minutes (the ledger's locked `xmin`) and the
+same causal team lambda, so only the share formula differs:
+
+```
+                   Brier    logloss   E[scorers]  actual  zeros on goals  top-3 hits
+GW4     current  0.04586    0.32682        23.3      26          8          13/26
+        prior    0.04419    0.24063        25.0      26          4          13/26
+GW5     current  0.04162    0.27366        23.4      21          6          10/21
+(held)  prior    0.03786    0.26695        25.2      21          6          10/21
+pooled  current  0.04371    0.29991        46.7      47         14          10/47
+        prior    0.04099    0.25395        50.3      47         10          12/47
+
+paired, clustered by club:
+  GW5 Brier    +0.00376  95% CI [+0.00160, +0.00592]  t=+3.41   prior better
+  pooled Brier +0.00273  95% CI [+0.00034, +0.00511]  t=+2.24   prior better
+  pooled logloss +0.04596 95% CI [+0.00417, +0.08776] t=+2.16   prior better
+```
+
+**Read this carefully.** The sample is two gameweeks and 47 goals. More importantly, the
+design was revised *after* seeing these numbers — the McBurnie inversion was found here — so
+GW4 and GW5 are no longer untouched data. Before that revision the same comparison came out
+indistinguishable on Brier at every split. **This is not a validated accuracy improvement,
+and is not presented as one.** GW6 is already locked and will grade prospectively; that is
+the test that counts.
+
+What the change *does* establish, independent of sample size, is that the model no longer
+asserts an impossibility 14 times in two gameweeks. That is a correctness fix, and it is the
+reason to ship it. The same standard as Rule 41: fixing a defect is not an accuracy claim.
+
+Note the honest cost: expected scorers moved from 46.7 (against 47 actual, near-perfect) to
+50.3, a mild over-prediction. `THETA` is the lever if that persists over a real sample. It has
+not been touched, because tuning it on two gameweeks would be exactly the mistake this file
+keeps warning about.
+
+### The 10 remaining zeros
+
+Four of the fourteen were fixed by the prior. The other ten were never a prior problem: those
+players are absent from the squad file entirely, or their FPL `web_name` is not a surname at
+all (`Bruno G.`, `Enzo`, `Andrés`). Doing the join at build time removes the whole class of
+failure for every future row. Historical rows keep a blank `p_score_shown` and are excluded
+from that metric rather than backfilled — reconstructing a displayed number after the fact is
+retrodiction, and Rule 42 exists precisely to stop that.

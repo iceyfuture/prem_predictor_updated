@@ -111,7 +111,8 @@ def fpl_players():
     return out
 
 
-def project_gw(gw, players=None, model=None, shares=None, weeks=None, minutes_model=None):
+def project_gw(gw, players=None, model=None, shares=None, weeks=None, minutes_model=None,
+               avail=None, minutes=None):
     if players is None:
         players = fpl_players()
     cold = getattr(project_gw, "_cold", set())
@@ -154,6 +155,7 @@ def project_gw(gw, players=None, model=None, shares=None, weeks=None, minutes_mo
     # start) is applied inside predict(), AFTER availability, so an injured starter's minutes go
     # to his own team-mates instead of disappearing.
     mn = fm.predict(players, gw, model=minutes_model)
+    p_shown = {}          # FPL id -> the anytime-scorer probability the card displays
     for fx in wk["fixtures"]:
         M, lam_h, lam_a = dc.score_matrix(model, fx["home"], fx["away"])
         cs_home = float(M[:, 0].sum())    # away scored 0
@@ -163,8 +165,21 @@ def project_gw(gw, players=None, model=None, shares=None, weeks=None, minutes_mo
             squad = [p for p in by_team.get(team, []) if mn[p["id"]]["exp_min"] >= MIN_PLAY]
             if not squad:
                 continue
+            # RULE 48: the number the fixture card shows, captured here where the FPL player
+            # id and the scorer model's player name are BOTH in hand. The forward-test ledger
+            # stores this, so what is graded is what was displayed -- no surname join at
+            # grading time, which is where a quarter of rows used to fall on the floor.
+            _shown = ps.scorer_probs(team, lam, shares, avail=avail, minutes=minutes)
+            _shown_by_surname = {}
+            for _pl, _pv in _shown.items():
+                _k = ps._surname(_pl)
+                _shown_by_surname[_k] = max(_shown_by_surname.get(_k, 0.0), float(_pv))
+            for _p in squad:
+                _v = _shown_by_surname.get(ps._surname(_p["name"]))
+                if _v is not None:
+                    p_shown[_p["id"]] = _v
             f = {p["id"]: mn[p["id"]]["exp_min"] / 90.0 for p in squad}
-            sh = shares.get(team)
+            sh = shares.get(ps.canon_team(team))
             surn = {}
             if sh is not None:
                 for pl, val in sh.items():
@@ -223,6 +238,11 @@ def project_gw(gw, players=None, model=None, shares=None, weeks=None, minutes_mo
                          "dc90": round(p.get("dc90", 0.0), 2), "mins": p.get("mins", 0),
                          "p_start": round(mn[p["id"]]["p_start"], 3),
                          "xmin": round(mn[p["id"]]["exp_min"], 1),
+                         # blank, not zero, when the scorer model never saw this player:
+                         # "we did not price him" and "we priced him at nothing" are
+                         # different claims and must not be graded as the same one
+                         "p_score_shown": (round(p_shown[p["id"]], 4)
+                                           if p["id"] in p_shown else ""),
                          "proj": round(proj[id(p)], 2)})
     rows.sort(key=lambda r: -r["proj"])
     return rows

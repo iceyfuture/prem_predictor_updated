@@ -1064,11 +1064,29 @@ def build():
     players = read_csv(os.path.join(ROOT, "outputs", "player_rankings_2026_27.csv"))
     aidx = {t: i for i, t in enumerate(model["teams"])}
 
+    # RULE 48: expected minutes for the scorer model. The share is a RATE times expected
+    # minutes, so without this the prior is spread over ~31 squad players when only ~14
+    # play, and every real scorer is diluted. Built once here and handed to both the fixture
+    # card and the FPL projection, so the two cannot drift apart.
+    scorer_minutes = {}
+    try:
+        import fpl_minutes as fm
+        _sp = sf.fpl_players()
+        _mn = fm.predict(_sp, active_gw)
+        for _p in _sp:
+            _m = _mn.get(_p["id"])
+            if _m:
+                scorer_minutes[(ps.canon_team(_p["ot"]), ps._surname(_p["name"]))] = _m["exp_min"]
+        print(f"  scorer minutes: {len(scorer_minutes)} players")
+    except Exception as _e:        # fall back to availability weights, never fail the build
+        _sp = None
+        print(f"  ! scorer minutes unavailable, using availability only ({_e})")
+
     # availability weights for the scorer model, from FPL status/chance-of-playing
     avail = {}
     for n in fpl["news"]:
         w = 0.0 if n["flag"] == "out" else ((n.get("chance") or 50) / 100.0 if n["flag"] == "doubt" else 1.0)
-        avail[(n["team"], ps._surname(n["who"]))] = w
+        avail[(ps.canon_team(n["team"]), ps._surname(n["who"]))] = w
     # news indexed by club so each card can show its own absentees
     news_by_team = {}
     for n in fpl["news"]:
@@ -1284,8 +1302,8 @@ def build():
                 "scorelines": top_scores(model, h, a),
                 "xg": f"{dp['xg_h']:.2f} - {dp['xg_a']:.2f}",
                 "form": {"h": hf, "a": af},
-                "scorers": {"h": [{"n": n, "p": round(v * 100)} for n, v in ps.match_scorers(h, dp["xg_h"], shares, avail, n=3)],
-                            "a": [{"n": n, "p": round(v * 100)} for n, v in ps.match_scorers(a, dp["xg_a"], shares, avail, n=3)]},
+                "scorers": {"h": [{"n": n, "p": round(v * 100)} for n, v in ps.match_scorers(h, dp["xg_h"], shares, avail, scorer_minutes, n=3)],
+                            "a": [{"n": n, "p": round(v * 100)} for n, v in ps.match_scorers(a, dp["xg_a"], shares, avail, scorer_minutes, n=3)]},
                 "news": {"h": news_by_team.get(h, [])[:3], "a": news_by_team.get(a, [])[:3]},
                 "cold_start": cold_pair,
             })
@@ -1307,8 +1325,9 @@ def build():
     first_ko = min(fx["utc"] for fx in active_wk["fixtures"])
     reveal_at = datetime.fromisoformat(first_ko.replace("Z", "+00:00")) - timedelta(days=2)
     locked = now_dt < reveal_at
-    fpl_players = sf.fpl_players()
-    active_rows = sf.project_gw(active_gw, players=fpl_players, model=model, shares=shares, weeks=weeks_raw)
+    fpl_players = _sp if _sp is not None else sf.fpl_players()
+    active_rows = sf.project_gw(active_gw, players=fpl_players, model=model, shares=shares,
+                                weeks=weeks_raw, avail=avail, minutes=scorer_minutes)
     active_team = sf.build_team(active_gw, weeks=weeks_raw, team_meta=team_meta, rows=active_rows)
 
     # RULE 34: lock EVERY player projection before kickoff, then grade it. Match outcomes and

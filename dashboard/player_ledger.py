@@ -15,17 +15,32 @@ You cannot improve a model you do not score. This is the missing loop.
 WHAT IT STORES
 One row per (gameweek, player), written at lock time and never rewritten:
 
-    locked   gw, id, name, team, pos, price, p_start, xmin, p_score, proj, locked_at
+    locked   gw, id, name, team, pos, price, p_start, xmin, p_score, p_score_shown,
+             proj, locked_at
     graded   started, minutes, goals, assists, points, bonus, xgi
-    scored   brier_start, ae_minutes, brier_score, err_points
+    scored   brier_start, ae_minutes, brier_score, brier_score_shown, err_points
 
 RULE 5 APPLIES HERE TOO: a prediction only counts if it was written down before the match. The
 lock happens on the first build of a gameweek and later builds leave those numbers alone — see
 `_same()` in build_dashboard.py for why re-stamping unchanged rows is its own problem.
 
-P(scores) is derived from the model's own xG/90 and expected minutes rather than from
-prem_scorer's name-keyed output, so it grades the same pipeline the dashboard displays and
-needs no surname matching:  P(>=1 goal) = 1 - exp(-xg90 * xmin/90).
+TWO scorer probabilities are stored, and the distinction is the point (RULE 48, audit §7):
+
+    p_score        1 - exp(-xg90 * xmin/90), the ledger's own xG/90 pipeline.
+    p_score_shown  the EXACT number the fixture card displays, captured inside
+                   simulate_fpl.project_gw where the FPL id and the scorer model's player
+                   name are both in hand.
+
+This file used to store only the first and claim it "grades the same pipeline the dashboard
+displays". That was wrong, and measurably so: the displayed model scored Brier 0.0445 over
+the two graded gameweeks while the ledger reported 0.0395 for a pipeline nobody could see.
+The forward test was flattering the desk by grading a different model. Grading the displayed
+number needed a surname join that dropped 27% of rows and five of twenty club names, which is
+presumably why the shortcut was taken; doing the join at BUILD time removes the problem
+entirely, because both keys exist there.
+
+`p_score_shown` is blank, never zero, when the scorer model did not price a player. "We did
+not price him" and "we priced him at nothing" are different claims and are not graded alike.
 """
 import csv, math, os
 
@@ -37,7 +52,9 @@ ACTUALS = os.path.join(ROOT, "outputs", "fpl_player_gameweek_2026_27.csv")
 COLS = ["key", "gw", "id", "name", "team", "pos", "price",
         "p_start", "xmin", "p_score", "proj", "locked_at", "late",
         "started", "minutes", "goals", "assists", "points", "bonus", "xgi",
-        "graded", "brier_start", "ae_minutes", "brier_score", "err_points"]
+        "graded", "brier_start", "ae_minutes", "brier_score", "err_points",
+        # RULE 48, appended so rows written before it migrate by reading back blank
+        "p_score_shown", "brier_score_shown"]
 
 
 def _f(v, d=None):
@@ -114,6 +131,9 @@ def record(gw, rows, now, finished=False, first_ko=None):
             "p_start": round(_f(r.get("p_start"), 0.0) or 0.0, 4),
             "xmin": round(xmin, 1),
             "p_score": round(1.0 - math.exp(-xg90 * xmin / 90.0), 4),
+            # the figure the fixture card showed; blank when the scorer model never saw him
+            "p_score_shown": (r.get("p_score_shown")
+                              if _f(r.get("p_score_shown")) is not None else ""),
             "proj": round(_f(r.get("proj"), 0.0) or 0.0, 2),
             "locked_at": now, "late": late, "graded": "",
         }
@@ -152,6 +172,8 @@ def record(gw, rows, now, finished=False, first_ko=None):
             "brier_start": round((_f(rec["p_start"], 0.0) - (1 if started else 0)) ** 2, 4),
             "ae_minutes": round(abs(_f(rec["xmin"], 0.0) - mins), 1),
             "brier_score": round((_f(rec["p_score"], 0.0) - (1 if goals else 0)) ** 2, 4),
+            "brier_score_shown": (round((_f(rec.get("p_score_shown")) - (1 if goals else 0)) ** 2, 4)
+                                  if _f(rec.get("p_score_shown")) is not None else ""),
             "err_points": round(_f(rec["proj"], 0.0) - _i(a.get("total_points")), 2),
         })
         n_graded += 1
@@ -197,6 +219,10 @@ def summary(led=None, n_new=0, n_graded=0):
     # a baseline that always guesses the base rate - the bar any model must clear
     base_s = sum(y for _, y in starts) / len(starts)
     base_g = sum(y for _, y in scores) / len(scores)
+    # only rows the scorer model actually priced; a blank is not a zero
+    shown = [(_f(r["p_score_shown"]), 1 if _i(r.get("goals")) else 0)
+             for r in done if _f(r.get("p_score_shown")) is not None]
+    base_sh = (sum(y for _, y in shown) / len(shown)) if shown else 0.0
     return {
         "tracked": len(led), "graded": len(done), "locked_now": n_new, "graded_now": n_graded,
         "late": late,
@@ -213,4 +239,15 @@ def summary(led=None, n_new=0, n_graded=0):
         "start_rate_actual": round(sum(y for _, y in starts) / len(starts) * 100, 1),
         "cal_start": _cal(starts),
         "cal_score": _cal(scores),
+        # RULE 48: the DISPLAYED scorer model, scored separately. Reported on its own rows
+        # (blank p_score_shown is excluded) with its own count, because averaging it into
+        # the xG/90 figure would recreate the problem it exists to expose.
+        "n_score_shown": len(shown),
+        "brier_score_shown": (round(sum((p - y) ** 2 for p, y in shown) / len(shown), 4)
+                              if shown else None),
+        "brier_score_shown_base": (round(sum((base_sh - y) ** 2 for _, y in shown) / len(shown), 4)
+                                   if shown else None),
+        "exp_scorers_shown": round(sum(p for p, _ in shown), 1) if shown else None,
+        "act_scorers_shown": sum(y for _, y in shown) if shown else None,
+        "cal_score_shown": _cal(shown),
     }
