@@ -918,11 +918,18 @@ def record_ledger(weeks, built_at, model=None):
                     rec["closer"] = ("model" if rec["brier_model"] < rec["brier_kalshi"]
                                      else "kalshi" if rec["brier_kalshi"] < rec["brier_model"] else "tie")
             rows[key] = rec
-    cols = ["key", "gw", "home", "away", "kickoff", "kickoff_utc", "late", "pred_at", "pred_h", "pred_d", "pred_a",
+    # NOTE the DictWriter below uses extrasaction="ignore": anything missing from this list
+    # is computed, attached to the record in memory, and then silently dropped on write.
+    # RULE 51's season/fixture_id/provenance were added to the records and left off here,
+    # so they round-tripped to nothing and every row read back with no provenance at all.
+    cols = ["key", "season", "fixture_id",
+            "gw", "home", "away", "kickoff", "kickoff_utc", "late", "pred_at", "pred_h", "pred_d", "pred_a",
             "close_at", "close_h", "close_d", "close_a",
             "kal_at", "kal_h", "kal_d", "kal_a", "kal_vig", "kal_url",
             "line_h", "line_d", "line_a", "result", "outcome", "graded",
-            "brier_model", "brier_kalshi", "brier_book", "rps_model", "rps_kalshi", "closer"]
+            "brier_model", "brier_kalshi", "brier_book", "rps_model", "rps_kalshi", "closer",
+            # RULE 51 provenance, appended so rows written before it read back blank
+            "code_commit", "model_config", "training_cutoff", "data_version"]
     import csv as _csv
     with open(path, "w", newline="") as f:
         w = _csv.DictWriter(f, fieldnames=cols, extrasaction="ignore"); w.writeheader()

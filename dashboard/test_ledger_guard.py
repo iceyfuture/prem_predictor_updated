@@ -34,10 +34,14 @@ KO = datetime(2026, 10, 10, 14, 0, tzinfo=timezone.utc)
 # RULE 51: keys are season-aware now. Derived here the same way production derives them,
 # so this constant cannot drift from the writer the way a typed-in "Arsenal|Leeds" did.
 import forecast as FC  # noqa: E402
-KEY = FC.fixture_key(FC.season_of(KO), "Arsenal", "Leeds")
+KEY = FC.fixture_key(FC.season_of(KO), "Arsenal", "Leeds", "9900001")
+# a stand-in for the fitted model, so provenance has something real to record
+MODEL = {"cutoff": "2026-10-07", "date_max": "2026-10-06", "n_matches": 3040,
+         "window_years": 8, "decay_base": 8.0, "decay_span": 3.0, "ridge": 8.0}
 def match(**kw):
     m = {"home": "Arsenal", "away": "Leeds", "time": "Sat 10 Oct 14:00",
          "utc": KO.isoformat(), "ph": 60, "pd": 23, "pa": 17,
+         "fixture_id": "9900001",
          "finished": False, "live": False, "result": None, "kalshi": None,
          "mkt": None}
     m.update(kw); return m
@@ -47,7 +51,7 @@ def run(m, at, path):
     """record_ledger writes to HERE/ledger.csv - point HERE at a temp dir."""
     saved = B.HERE
     B.HERE = path
-    try: return B.record_ledger(weeks(m), at)
+    try: return B.record_ledger(weeks(m), at, model=MODEL)
     finally: B.HERE = saved
 
 def rows(path):
@@ -241,6 +245,23 @@ def main():
     check("an edited tree is flagged dirty rather than claiming a clean commit",
           lambda: _assert(prov["code_commit"] == "" or
                           re.match(r"^[0-9a-f]{7,}(\+dirty)?$", prov["code_commit"])))
+    # The writer uses DictWriter(extrasaction="ignore") against a FIXED column list, so a
+    # field can be computed, attached to the record, and silently dropped on write. That is
+    # exactly what happened: provenance was stamped correctly and round-tripped to nothing,
+    # and every row read back blank. Checking the source stamps it is not enough -- the only
+    # test that catches this writes a row and reads it back.
+    _rt = fresh("roundtrip")
+    run(match(), (KO - timedelta(days=3)).isoformat(), _rt)
+    _row = rows(_rt)[KEY]
+    for _k in ("season", "fixture_id", "code_commit", "model_config",
+               "training_cutoff", "data_version"):
+        check(f"{_k} survives the write/read round-trip",
+              lambda kk=_k: _assert((_row.get(kk) or "").strip() != ""))
+    check("the round-tripped season matches the kickoff's season",
+          lambda: _assert(_row["season"] == FC.season_of(KO)))
+    check("the round-tripped key is the season-aware one",
+          lambda: _assert(_row["key"] == KEY))
+
     check("the writer stamps provenance on the opening lock",
           lambda: _assert("**prov}" in src))
     check("and backfills it without overwriting a locked row's own",

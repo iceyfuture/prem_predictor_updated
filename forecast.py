@@ -234,9 +234,14 @@ def model_config(model=None):
 
 
 def data_version(model=None):
-    """A fingerprint of the training data: its last date and how many matches were used."""
+    """A fingerprint of the training data: its last date and how many matches were used.
+
+    Blank when there is no model to fingerprint. Returning a bare ":" would be worse than
+    nothing: it looks like a recorded value and carries none.
+    """
     m = model or {}
-    return f"{m.get('date_max', '')}:{m.get('n_matches', '')}"
+    last, n = m.get("date_max", ""), m.get("n_matches", "")
+    return f"{last}:{n}" if (last or n != "") else ""
 
 
 def provenance(model=None):
