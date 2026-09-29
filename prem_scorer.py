@@ -75,6 +75,20 @@ def canon_team(name):
     return TEAM_ALIAS.get((name or "").strip(), (name or "").strip())
 
 
+# FPL says GK where the squad file says GKP; everything else already agrees.
+_POS_ALIAS = {"GK": "GKP", "GKP": "GKP", "DEF": "DEF", "MID": "MID", "FWD": "FWD"}
+
+
+def canon_pos(pos):
+    """Canonical position code, or '' when it is missing or unrecognised.
+
+    The squad file carries NaN for a few players, so this must survive a float.
+    """
+    if not isinstance(pos, str):
+        return ""
+    return _POS_ALIAS.get(pos.strip().upper(), "")
+
+
 def _surname(name):
     n = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode()
     n = re.sub(r"[.\-']", " ", n).lower()
@@ -93,6 +107,41 @@ def player_rate(w_goals, w_minutes, position):
     pos = position if position in PRIOR_G90 else DEFAULT_POS
     n90 = max(float(w_minutes or 0.0), 0.0) / 90.0
     return (max(float(w_goals or 0.0), 0.0) + PRIOR_K * PRIOR_G90[pos]) / (n90 + PRIOR_K)
+
+
+_POSITIONS = None
+
+
+def load_positions():
+    """{(club, surname): position} for the squad file, but ONLY where that surname is
+    unique within the club.
+
+    An ambiguous surname is deliberately absent rather than resolved to one of the
+    candidates: Chelsea have both Wesley Fofana (DEF) and David Datro Fofana (FWD), and
+    picking either would be a guess.
+    """
+    global _POSITIONS
+    if _POSITIONS is not None:
+        return _POSITIONS
+    df = pd.read_csv(LINKED)
+    if "position" not in df.columns:
+        df["position"] = DEFAULT_POS
+    seen, dupes = {}, set()
+    for team, player, pos in zip(df.team_2026_27, df.player, df.position):
+        k = (canon_team(team), _surname(player))
+        if k in seen:
+            dupes.add(k)                 # ANY repeat, even at the same position
+        seen[k] = canon_pos(pos)
+    _POSITIONS = {k: v for k, v in seen.items() if k not in dupes}
+    return _POSITIONS
+
+
+def player_pos(team, player):
+    """This player's canonical position, from the squad file row itself."""
+    return canon_pos(_POS_BY_NAME.get((canon_team(team), player), ""))
+
+
+_POS_BY_NAME = {}
 
 
 def load_shares():
@@ -121,12 +170,44 @@ def load_shares():
             # never do that. Real expected minutes, where production has them, are passed
             # to scorer_probs() instead; this default is only the no-information case.
             w[r.player] = rate * NEW_REL_MIN[pos]
+            _POS_BY_NAME[(canon_team(team), r.player)] = pos
         tot = sum(w.values())
         if tot <= 0:
             continue
         s = pd.Series({pl: v / tot for pl, v in w.items()}).sort_values(ascending=False)
         shares[canon_team(team)] = s
     return shares
+
+
+def _minutes_for(minutes, team, player):
+    """This player's expected minutes, or None if we cannot attribute any to HIM.
+
+    Matching on bare surname is not safe. Chelsea's squad holds Wesley Fofana (DEF) and
+    David Datro Fofana (FWD); FPL lists exactly one Fofana at Chelsea, a defender. Keyed by
+    surname alone both of them resolve to the defender's minutes, so David Datro Fofana --
+    who has not been at the club for years -- inherited a real player's minutes, cleared
+    the "is he playing" check, and was published at 26% to score. Hull's goalkeeper Dillon
+    Phillips reached Man City's Kalvin Phillips the same way.
+
+    So: position first, and a bare surname only when it is unambiguous on BOTH sides. When
+    the surname is shared and the positions do not separate them, return None -- the caller
+    treats that as "not playing", which is the safe direction for a name we cannot resolve.
+    """
+    if minutes is None:
+        return None
+    sn = _surname(player)
+    pos = player_pos(team, player)
+    if pos:
+        v = minutes.get((team, sn, pos))
+        if v is not None:
+            return v
+    # The bare-surname key exists when the surname is unique on the FEED's side. It must
+    # also be unique on OURS, or the wrong namesake collects it: FPL has one Fofana at
+    # Chelsea, our squad file has two, and without this check the forward still inherited
+    # the defender's minutes.
+    if (team, sn) not in load_positions():
+        return None
+    return minutes.get((team, sn))
 
 
 def scorer_probs(team, lam, shares, avail=None, minutes=None):
@@ -151,12 +232,13 @@ def scorer_probs(team, lam, shares, avail=None, minutes=None):
     # entries in it (a feed hiccup, a club FPL has not published), the map is uninformative
     # HERE and absence from it means nothing. If the club IS covered, absence is evidence.
     club_covered = minutes is not None and any(
-        (team, _surname(pl)) in minutes for pl, _ in items)
+        _minutes_for(minutes, team, pl) is not None for pl, _ in items)
     adj = []
     for pl, sh in items:
         k = (team, _surname(pl))
-        if minutes is not None and k in minutes:
-            m = max(float(minutes[k]), 0.0) / 90.0
+        _m = _minutes_for(minutes, team, pl) if minutes is not None else None
+        if _m is not None:
+            m = max(float(_m), 0.0) / 90.0
         elif club_covered:
             # FPL lists every player registered to a club's squad. Someone in our squad file
             # who is NOT in that list is out on loan, sold, or unregistered -- he is not

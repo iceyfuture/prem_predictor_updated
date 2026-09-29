@@ -1983,3 +1983,64 @@ Worth stating plainly: this is the third time in this file that a *default* has 
 bug. `avail.get(k, 1.0)`, `_f(v, 0.0)` reading a blank as a real zero (Rule 34), and the
 broad `except` that turned an UnboundLocalError into a silently missing feature. **A default
 is an assertion about the unobserved case, and it is usually the optimistic one.**
+
+## Rule 48b — a surname is not an identifier
+
+Caught by the user, again on the live desk: **David Datro Fofana was published as Chelsea's
+second-likeliest scorer at 26%, and he has not been at the club for years.**
+
+Rule 48a was not the cause. He passed the "is he playing" check with a real player's minutes.
+
+### The collision
+
+```
+FPL lists at Chelsea:        Fofana            DEF   312 min
+Our squad file has:          Wesley Fofana     DEF
+                             David Datro Fofana FWD
+```
+
+The minutes map was keyed `(club, surname)`. Both squad entries collapse to
+`("Chelsea", "fofana")`, so the forward inherited the defender's expected minutes, cleared
+every guard, and was priced with the full forward prior. Hull's goalkeeper Dillon Phillips
+reached Man City's Kalvin Phillips by the same route — which is why the squad file lists a
+Hull keeper with `prior_pl_team = Man City`.
+
+Four clubs have a shared surname on our side, four on FPL's. Small, and each one publishes a
+player who is not there.
+
+### The fix
+
+`_minutes_for()` resolves position first, and accepts a bare surname **only when it is
+unique on both sides**:
+
+1. `(club, surname, position)` — exact, when the feed gives a position.
+2. `(club, surname)` — present only when the surname belongs to exactly one FPL player at
+   that club, *and* to exactly one player in our squad file.
+3. Otherwise `None`, which Rule 48a's guard reads as "not playing".
+
+Refusing to resolve is the safe direction. A name we cannot pin to a person should not be
+published as a likely scorer.
+
+```
+Chelsea before:  Cole Palmer 27%, David Datro Fofana 24%, Morgan Rogers 20%
+        after :  Cole Palmer 35%, Morgan Rogers 26%, Danny Welbeck 21%
+```
+
+### A position mismatch is NOT a namesake
+
+The first version of the end-to-end test required a published scorer's position to match
+FPL's. It flagged **165** players — Ipswich's Emersonn (our MID, FPL FWD), Sunderland's
+Meunier (our MID, FPL DEF), Tottenham's Marmoush (our MID, FPL FWD). All the same people;
+FPL classifies for fantasy scoring, not for the pitch. The test was wrong, not the data.
+
+The invariant that holds is **resolvability**: every published scorer must resolve to real
+expected minutes. 1,980 checked, 0 failures. That is the property the fix actually
+guarantees, and it does not depend on two sources agreeing about what a midfielder is.
+
+### The pattern, now three deep
+
+Rule 48 said a default is an assertion about the unobserved case. This one is narrower and
+worse: **a join key that is not unique is an assertion that two people are one person.**
+`(club, surname)` looked like an identifier, was used as one everywhere in this pipeline,
+and quietly merged a defender with a forward, a goalkeeper with a midfielder. Every join in
+this repo that keys on a name should be assumed to be doing this until checked.

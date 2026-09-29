@@ -1091,11 +1091,28 @@ def build():
         # availability weights -- which is precisely the dilution this block exists to stop.
         _sp = sf.fpl_players()
         _mn = fm.predict(_sp, active_gw)
+        # Keyed BOTH ways: (club, surname, position) always, and (club, surname) only where
+        # that surname belongs to exactly one FPL player at the club. A shared surname with
+        # no position match is then unresolvable by design rather than resolved to whichever
+        # namesake happened to be seen last -- see prem_scorer._minutes_for.
+        _bysn = {}
         for _p in _sp:
             _m = _mn.get(_p["id"])
-            if _m:
-                scorer_minutes[(ps.canon_team(_p["ot"]), ps._surname(_p["name"]))] = _m["exp_min"]
-        print(f"  scorer minutes: {len(scorer_minutes)} players")
+            if not _m:
+                continue
+            _club, _sn = ps.canon_team(_p["ot"]), ps._surname(_p["name"])
+            _pos = ps.canon_pos(_p.get("pos"))
+            if _pos:
+                scorer_minutes[(_club, _sn, _pos)] = _m["exp_min"]
+            _bysn.setdefault((_club, _sn), []).append(_m["exp_min"])
+        _amb = 0
+        for _k, _v in _bysn.items():
+            if len(_v) == 1:
+                scorer_minutes[_k] = _v[0]
+            else:
+                _amb += 1
+        print(f"  scorer minutes: {len(_bysn)} players"
+              + (f" ({_amb} ambiguous surname(s), resolved by position only)" if _amb else ""))
     except Exception as _e:        # fall back to availability weights, never fail the build
         _sp = None
         print(f"  ! scorer minutes unavailable, using availability only ({_e})")

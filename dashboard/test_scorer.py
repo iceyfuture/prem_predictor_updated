@@ -198,6 +198,37 @@ def main():
     check("a blank shown-probability is excluded from the score, not read as 0",
           lambda: _assert('_f(rec.get("p_score_shown")) is not None' in led))
 
+    print("\n=== a shared surname is never resolved by guessing ===")
+    # Chelsea's squad holds Wesley Fofana (DEF) and David Datro Fofana (FWD). FPL lists one
+    # Fofana at Chelsea, a defender. Keyed by surname alone both resolved to the defender's
+    # minutes, so the forward -- who has not been at the club for years -- inherited a real
+    # player's minutes, cleared the "is he playing" check and was published at 26% to score.
+    check("GK and GKP are the same position",
+          lambda: _assert(ps.canon_pos("GK") == ps.canon_pos("GKP") == "GKP"))
+    check("an unknown position code resolves to nothing, not to a default",
+          lambda: _assert(ps.canon_pos("STRIKER") == ""))
+    check("a NaN position does not raise",
+          lambda: _assert(ps.canon_pos(float("nan")) == ""))
+    pos_idx = ps.load_positions()
+    check("a surname shared inside one club is excluded from the surname index",
+          lambda: _assert(("Chelsea", "fofana") not in pos_idx))
+    check("an unshared surname is still indexed",
+          lambda: _assert(("Chelsea", "palmer") in pos_idx))
+    # position-keyed entry resolves the right man; the bare key must not rescue the other
+    _mm = {("Chelsea", "fofana", "DEF"): 77.0, ("Chelsea", "fofana"): 77.0}
+    check("the defender gets the defender's minutes",
+          lambda: _assert(ps._minutes_for(_mm, "Chelsea", "Wesley Fofana") == 77.0))
+    check("the forward is NOT given them",
+          lambda: _assert(ps._minutes_for(_mm, "Chelsea", "David Datro Fofana") is None))
+    check("an unresolvable name is treated as not playing, not as a starter",
+          lambda: _assert(ps.scorer_probs("Chelsea", 1.6, shares, minutes=_mm)
+                          .get("David Datro Fofana") == 0.0))
+    check("a unique surname still resolves through the bare key",
+          lambda: _assert(ps._minutes_for({("Chelsea", "palmer"): 80.0},
+                                          "Chelsea", "Cole Palmer") == 80.0))
+    check("no minutes map at all means no attribution",
+          lambda: _assert(ps._minutes_for(None, "Chelsea", "Cole Palmer") is None))
+
     print("\n=== INVARIANT: nobody is published who is not in a club's FPL squad ===")
     # The end-to-end version of the same check. This is the one that would have caught
     # O'Mahony on the live desk rather than in a unit test.
@@ -214,6 +245,28 @@ def main():
             _players = None
         if _players:
             _fpl = {(ps.canon_team(q["ot"]), ps._surname(q["name"])) for q in _players}
+            # Rebuild the minutes map exactly as the build does, so this tests the real
+            # lookup. A position MISMATCH between the two sources is NOT evidence of a
+            # namesake -- FPL lists Marmoush as FWD where the squad file says MID, and they
+            # are the same player. Only an unresolvable attribution is evidence.
+            try:
+                import fpl_minutes as _fm
+                _pmn = _fm.predict(_players, 6)
+            except Exception:
+                _pmn = {}
+            _mmap, _bysn = {}, {}
+            for _q in _players:
+                _mv = _pmn.get(_q["id"])
+                if not _mv:
+                    continue
+                _cl, _sn2 = ps.canon_team(_q["ot"]), ps._surname(_q["name"])
+                _po = ps.canon_pos(_q.get("pos"))
+                if _po:
+                    _mmap[(_cl, _sn2, _po)] = _mv["exp_min"]
+                _bysn.setdefault((_cl, _sn2), []).append(_mv["exp_min"])
+            for _kk, _vv in _bysn.items():
+                if len(_vv) == 1:
+                    _mmap[_kk] = _vv[0]
             from datetime import datetime as _dt, timezone as _tz
             _now = _dt.now(_tz.utc)
             _bad, _tot = [], 0
@@ -225,10 +278,19 @@ def main():
                     for _side, _club in (("h", _m["home"]), ("a", _m["away"])):
                         for _s in (_m.get("scorers", {}).get(_side) or []):
                             _tot += 1
-                            if (ps.canon_team(_club), ps._surname(_s["n"])) not in _fpl:
-                                _bad.append((_club, _s["n"]))
-            check(f"every published scorer is in an FPL squad ({_tot} checked, {len(_bad)} not)",
+                            _k = (ps.canon_team(_club), ps._surname(_s["n"]))
+                            if _k not in _fpl:
+                                _bad.append((_club, _s["n"], "not in FPL"))
+                            elif ps._minutes_for(_mmap, _club, _s["n"]) is None:
+                                # the surname exists at the club but we cannot attribute
+                                # minutes to THIS man -- a namesake took them
+                                _bad.append((_club, _s["n"], "unresolvable namesake"))
+            check(f"every published scorer resolves to real expected minutes "
+                  f"({_tot} checked, {len(_bad)} not)",
                   lambda: _assert(not _bad))
+            if _bad:
+                for _c, _n, _why in _bad[:6]:
+                    print(f"       {_c}: {_n} ({_why})")
 
     print("\n=== summary reports the displayed model on its own rows ===")
     s = PL.summary()
