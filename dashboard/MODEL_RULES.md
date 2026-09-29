@@ -1910,3 +1910,76 @@ four strings are what would have said so.
 They are stamped on the opening lock and only ever `setdefault`-ed afterwards, so a locked
 row keeps the provenance it was born with. `+dirty` is not cosmetic — it is the difference
 between "this commit reproduces this number" and "something close to this commit might".
+
+## Rule 48a — correction: a player the minutes map does not list is not a starter
+
+Caught by the user on the live desk, not by any test: **Brighton's most likely scorer was
+published as Mark O'Mahony at 20%, and he is not in Brighton's FPL squad at all.**
+
+He was not alone. Across GW6 the published top-three included Arsenal's Ismeal Kabia (0 PL
+minutes), Man United's Ethan Wheatley (1.6 weighted minutes), Everton's Martin Sherif,
+Hull's Hugh Parker, Tottenham's Veliz / Donley / Lankshear, and Sunderland's Abdullahi and
+Semedo. Youth and loanees, ranked above the actual forwards.
+
+### Two of my own changes compounding
+
+**Rule 48 made them eligible.** Before it, a player with no Premier League goals had share
+exactly 0 and could never be listed. Giving everyone a defensible prior was right — but it
+made 103 squad-file players visible who had been silently invisible.
+
+**The minutes fallback then made them starters.** `scorer_probs` read:
+
+```python
+if minutes is not None and k in minutes:
+    m = minutes[k] / 90.0
+elif avail:
+    m = float(avail.get(k, 1.0))     # <- default 1.0
+```
+
+A player *missing* from the minutes map fell through to `avail`'s default of **1.0 — a full
+ninety minutes**, the strongest weight available. FPL lists every player registered to a
+club's squad, so absence from that map is evidence a player is out on loan, sold or
+unregistered. The code treated it as evidence he was nailed on.
+
+Neither change is wrong alone. Together they published a striker who is not at the club as
+its likeliest scorer.
+
+### The fix
+
+Absence from the map now means zero expected minutes — but only when the map actually
+covers that club. If a club has no entries at all (a feed hiccup, a club FPL has not
+published), the map is uninformative *there* and the old `avail` path still applies, so a
+partial feed degrades instead of wiping out twenty squads.
+
+Before and after, same build:
+
+```
+Brighton   before:  Mark O'Mahony 20%, Charalampos Kostoulas 19%, Georginio Rutter 12%
+           after :  Charalampos Kostoulas 35%, Diego Gómez 22%, Yasin Ayari 17%
+Arsenal    before:  Saka 31%, Havertz 30%, Ismeal Kabia 19%
+           after :  Saka 36%, Havertz 35%, Ødegaard 22%
+Man United before:  Mbeumo 23%, Ethan Wheatley 22%, Cunha 19%
+           after :  Mbeumo 34%, Cunha 28%, Bruno Fernandes 24%
+```
+
+### What it did not reach
+
+Nothing wrong was graded. `p_score_shown` is populated on **0** ledger rows: GW6 locked on
+2026-09-20, before Rule 48 existed, and Rule 5 refuses to restate a locked row. The bad
+numbers were displayed and never entered the forward test. GW7 will be the first gameweek
+to carry a graded displayed-scorer probability, and it carries the corrected one.
+
+### The test that should have existed
+
+Unit tests covered the minutes weighting and passed, because they only ever supplied maps
+that contained the players being tested. The real failure mode was a player the map *did
+not mention*, which no test constructed.
+
+There is now an end-to-end invariant over the built payload: **every published scorer must
+appear in a club's FPL squad** — 1,980 checked, 0 failures. That is the check that would
+have caught this on the desk rather than leaving it for a reader to notice.
+
+Worth stating plainly: this is the third time in this file that a *default* has caused the
+bug. `avail.get(k, 1.0)`, `_f(v, 0.0)` reading a blank as a real zero (Rule 34), and the
+broad `except` that turned an UnboundLocalError into a silently missing feature. **A default
+is an assertion about the unobserved case, and it is usually the optimistic one.**

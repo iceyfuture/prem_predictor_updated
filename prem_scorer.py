@@ -147,11 +147,28 @@ def scorer_probs(team, lam, shares, avail=None, minutes=None):
     if team not in shares:
         return {}
     items = list(shares[team].items())
+    # Does the minutes map cover this club at all? If the map was built but this club has no
+    # entries in it (a feed hiccup, a club FPL has not published), the map is uninformative
+    # HERE and absence from it means nothing. If the club IS covered, absence is evidence.
+    club_covered = minutes is not None and any(
+        (team, _surname(pl)) in minutes for pl, _ in items)
     adj = []
     for pl, sh in items:
         k = (team, _surname(pl))
         if minutes is not None and k in minutes:
             m = max(float(minutes[k]), 0.0) / 90.0
+        elif club_covered:
+            # FPL lists every player registered to a club's squad. Someone in our squad file
+            # who is NOT in that list is out on loan, sold, or unregistered -- he is not
+            # playing. Falling through to `avail`'s default of 1.0 treated him as a nailed-on
+            # starter instead, which is the strongest possible weight and exactly backwards.
+            #
+            # This was invisible before RULE 48: a player with no Premier League goals had
+            # share 0 and could never be listed. Giving everyone a prior made 103 such
+            # players eligible, and the 1.0 default then ranked several of them top-three.
+            # Brighton's Mark O'Mahony -- 7.6 weighted PL minutes, not in FPL's squad at all
+            # -- was published as the club's most likely scorer at 20%.
+            m = 0.0
         elif avail:
             m = float(avail.get(k, 1.0))
         else:
