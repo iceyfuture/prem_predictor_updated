@@ -168,18 +168,50 @@ def main():
                           FC.fixture_key("2026/27", "A", "B", "9")))
 
     print("\n=== migration is safe, idempotent and backed up ===")
+    # Build a LEGACY-format fixture rather than copying the real ledger. The real one is
+    # migrated the first time a build runs, after which _migrate_keys correctly no-ops and
+    # writes no backup -- so a test that copies it would pass today and fail tomorrow for a
+    # reason that is not a bug. That is the same mistake as asserting a production file does
+    # not exist: it encodes a temporary fact about the world.
     import shutil as _sh, tempfile as _tf
     tmpd = _tf.mkdtemp()
     tpath = os.path.join(tmpd, "ledger.csv")
-    _sh.copy2(REAL, tpath)
+    legacy_rows = [
+        {"key": "Arsenal|Chelsea", "home": "Arsenal", "away": "Chelsea", "gw": "1",
+         "kickoff_utc": "2026-08-21T19:00:00+00:00", "pred_at": "2026-07-24T21:29+00:00",
+         "pred_h": "55", "pred_d": "24", "pred_a": "21", "result": "2-1", "outcome": "H"},
+        {"key": "Hull|Man United", "home": "Hull", "away": "Man United", "gw": "1",
+         "kickoff_utc": "2027-01-17T14:00:00+00:00", "pred_at": "2026-07-24T21:29+00:00",
+         "pred_h": "30", "pred_d": "27", "pred_a": "43", "result": "", "outcome": ""},
+        {"key": "NoKickoff|Row", "home": "NoKickoff", "away": "Row", "gw": "2",
+         "kickoff_utc": "", "pred_at": "2026-07-24T21:29+00:00",
+         "pred_h": "40", "pred_d": "30", "pred_a": "30", "result": "", "outcome": ""},
+    ]
+    with open(tpath, "w", newline="") as _f:
+        _w = csv.DictWriter(_f, fieldnames=list(legacy_rows[0].keys()))
+        _w.writeheader(); _w.writerows(legacy_rows)
     orig = {r["key"]: r for r in B.read_csv(tpath)}
     once = B._migrate_keys(dict(orig), tpath)
     twice = B._migrate_keys(dict(once), tpath)
     check("no rows are gained or lost", lambda: _assert(len(once) == len(orig)))
-    check("every key is now season-aware",
-          lambda: _assert(all(re.match(r"^\d{4}/\d{2}\|", k) for k in once)))
+    check("rows WITH a kickoff become season-aware",
+          lambda: _assert(sum(bool(re.match(r"^\d{4}/\d{2}\|", k)) for k in once) == 2))
+    check("a row with no kickoff is left alone rather than guessed at",
+          lambda: _assert("NoKickoff|Row" in once))
+    check("the season comes from the row's own kickoff, not from today",
+          lambda: _assert("2026/27|Arsenal|Chelsea" in once
+                          and "2026/27|Hull|Man United" in once))
     check("running it again changes nothing", lambda: _assert(set(twice) == set(once)))
     check("a backup exists", lambda: _assert(os.path.exists(tpath + ".pre-rule51.bak")))
+    # the backup captures the PRE-migration state, so a later run must never overwrite it
+    _bak = tpath + ".pre-rule51.bak"
+    _before = open(_bak).read()
+    B._migrate_keys(dict(once), tpath)
+    check("a second run does not overwrite the original backup",
+          lambda: _assert(open(_bak).read() == _before))
+    check("the backup holds the pre-migration keys, not the migrated ones",
+          lambda: _assert("Arsenal|Chelsea" in _before
+                          and "2026/27|Arsenal|Chelsea" not in _before))
     byha = {(r["home"], r["away"]): r for r in orig.values()}
     altered = [c for r in once.values() for c in byha[(r["home"], r["away"])]
                if c not in ("key", "season")

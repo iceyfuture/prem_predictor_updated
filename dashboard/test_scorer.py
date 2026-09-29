@@ -154,6 +154,15 @@ def main():
     bd = open(os.path.join(HERE, "build_dashboard.py")).read()
     check("the fixture card and the projection share one minutes map",
           lambda: _assert("scorer_minutes" in bd and "minutes=scorer_minutes" in bd))
+    # `sf` is imported INSIDE the build function, which makes it function-local for the whole
+    # body. The first version of this block used sf.fpl_players() above that import, raised
+    # UnboundLocalError, and was swallowed by the block's own except -- so the build printed
+    # a one-line warning, fell back to availability weights, and shipped the diluted shares
+    # this feature exists to prevent. Nothing failed; the feature was simply off.
+    first_use = bd.find("sf.fpl_players()")
+    first_import = bd.find("import simulate_fpl as sf")
+    check("simulate_fpl is imported before its first use in the build",
+          lambda: _assert(first_import != -1 and first_use != -1 and first_import < first_use))
     led = open(os.path.join(HERE, "player_ledger.py")).read()
     check("the ledger no longer claims xG/90 is the displayed pipeline",
           lambda: _assert("so it grades the same pipeline the dashboard displays" not in led))

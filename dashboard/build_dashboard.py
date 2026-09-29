@@ -1064,6 +1064,14 @@ def build():
     players = read_csv(os.path.join(ROOT, "outputs", "player_rankings_2026_27.csv"))
     aidx = {t: i for i, t in enumerate(model["teams"])}
 
+    # The active gameweek is needed by the scorer-minutes block below AND by the fantasy
+    # section much further down. Computed once, here, because the fixture cards need it
+    # first; it depends only on weeks_raw and events, both already built.
+    last_finished = max([wk["gw"] for wk in weeks_raw
+                         if all(fx["id"] in {e["id"] for e in events if e["finished"]}
+                                for fx in wk["fixtures"])] or [0])
+    active_gw = min(last_finished + 1, weeks_raw[-1]["gw"])
+
     # RULE 48: expected minutes for the scorer model. The share is a RATE times expected
     # minutes, so without this the prior is spread over ~31 squad players when only ~14
     # play, and every real scorer is diluted. Built once here and handed to both the fixture
@@ -1071,6 +1079,9 @@ def build():
     scorer_minutes = {}
     try:
         import fpl_minutes as fm
+        import simulate_fpl as sf        # also imported further down; `sf` is function-local,
+        # so without this line it is unbound HERE and the whole block silently falls back to
+        # availability weights -- which is precisely the dilution this block exists to stop.
         _sp = sf.fpl_players()
         _mn = fm.predict(_sp, active_gw)
         for _p in _sp:
@@ -1319,11 +1330,7 @@ def build():
     import simulate_fpl as sf
     now_dt = datetime.now(timezone.utc)
     now_iso = now_dt.isoformat()
-    # last fully-finished gameweek -> the active week is the next one
-    last_finished = max([wk["gw"] for wk in weeks_raw
-                         if all(fx["id"] in {e["id"] for e in events if e["finished"]}
-                                for fx in wk["fixtures"])] or [0])
-    active_gw = min(last_finished + 1, weeks_raw[-1]["gw"])
+    # last_finished / active_gw are computed once, above the fixture cards, which need them
     active_wk = next(w for w in weeks_raw if w["gw"] == active_gw)
     first_ko = min(fx["utc"] for fx in active_wk["fixtures"])
     reveal_at = datetime.fromisoformat(first_ko.replace("Z", "+00:00")) - timedelta(days=2)
