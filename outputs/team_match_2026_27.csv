@@ -99,3 +99,5 @@ season,gw,date,fixture,team,opponent,venue,gf,ga,result,pts,shots,shots_on_targe
 2026-27,5,2026-09-20,5795460,Crystal Palace,Leeds,A,0,0,D,1,,,,,,,,1.07,0.81,1.32,match,,,,,,,,,,,,
 2026-27,5,2026-09-20,5795461,Man City,Sunderland,H,5,3,W,3,,,,,,,,2.81,1.71,3.62,match,,,,,,,,,,,,
 2026-27,5,2026-09-20,5795461,Sunderland,Man City,A,3,5,L,0,,,,,,,,3.62,1.69,2.81,match,,,,,,,,,,,,
+2026-27,6,2026-10-10,5795465,Arsenal,Leeds,H,2,1,W,3,,,,,,,,,,,,,,,,,,,,,,,
+2026-27,6,2026-10-10,5795465,Leeds,Arsenal,A,1,2,L,0,,,,,,,,,,,,,,,,,,,,,,,
