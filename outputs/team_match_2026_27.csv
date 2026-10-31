@@ -159,3 +159,5 @@ season,gw,date,fixture,team,opponent,venue,gf,ga,result,pts,shots,shots_on_targe
 2026-27,8,2026-10-25,5795493,Bournemouth,Man United,A,3,0,W,3,,,,,,,,2.15,0.79,1.18,match,,,,,,,,,,,,
 2026-27,8,2026-10-25,5795494,Sunderland,Leeds,H,0,0,D,1,,,,,,,,0.85,0.44,0.75,match,,,,,,,,,,,,
 2026-27,8,2026-10-25,5795494,Leeds,Sunderland,A,0,0,D,1,,,,,,,,0.75,0.58,0.85,match,,,,,,,,,,,,
+2026-27,9,2026-10-31,5795498,Chelsea,Man United,H,2,0,W,3,,,,,,,,,,,,,,,,,,,,,,,
+2026-27,9,2026-10-31,5795498,Man United,Chelsea,A,0,2,L,0,,,,,,,,,,,,,,,,,,,,,,,
