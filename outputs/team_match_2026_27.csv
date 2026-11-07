@@ -179,3 +179,5 @@ season,gw,date,fixture,team,opponent,venue,gf,ga,result,pts,shots,shots_on_targe
 2026-27,9,2026-11-01,5795501,Arsenal,Liverpool,A,1,0,W,3,,,,,,,,0.97,1.37,1.04,match,,,,,,,,,,,,
 2026-27,9,2026-11-02,5795503,Newcastle,Everton,H,0,1,L,0,,,,,,,,1.3,0.64,2.44,match,,,,,,,,,,,,
 2026-27,9,2026-11-02,5795503,Everton,Newcastle,A,1,0,W,3,,,,,,,,2.44,0.96,1.3,match,,,,,,,,,,,,
+2026-27,10,2026-11-06,5795508,Everton,Coventry,H,3,1,W,3,,,,,,,,,,,,,,,,,,,,,,,
+2026-27,10,2026-11-06,5795508,Coventry,Everton,A,1,3,L,0,,,,,,,,,,,,,,,,,,,,,,,
