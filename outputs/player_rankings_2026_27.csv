@@ -473,7 +473,7 @@ rank,first_name,second_name,w_points,w_goals,w_assists,w_goal_involvements,w_xgi
 472,Darko,Gyabi,0.06,0.0,0.0,0.0,0.0,0.0,0.44,2,Gyabi,MID,Hull,2025-26,0.0,0.06,"recency-weighted FPL points, decay 8**(-age/3)"
 473,Gedson,Carvalho Fernandes,0.05,0.0,0.0,0.0,0.0,0.0,0.48,2,Fernandes,MID,Tottenham,2020-21,0.0,0.05,"recency-weighted FPL points, decay 8**(-age/3)"
 474,Simon,Moore,0.02,0.0,0.0,0.0,0.0,0.0,1.41,3,Moore,GKP,Tottenham,2025-26,0.0,0.02,"recency-weighted FPL points, decay 8**(-age/3)"
-475,Ibrahima,Cissé,0.02,0.0,0.0,0.0,0.0,0.0,0.34,1,Cissé,MID,Fulham,2018-19,0.0,0.02,"recency-weighted FPL points, decay 8**(-age/3)"
+475,Ibrahima,Cissé,0.02,0.0,0.0,0.0,0.0,0.0,0.34,1,Cissé,MID,Aston Villa,2018-19,0.0,0.02,"recency-weighted FPL points, decay 8**(-age/3)"
 476,Patrick,McNair,0.01,0.0,0.0,0.0,0.0,0.0,0.34,1,McNair,DEF,Hull,2016-17,0.0,0.01,"recency-weighted FPL points, decay 8**(-age/3)"
 477,Max,Thompson,0.01,0.0,0.0,0.0,0.0,0.0,0.02,2,Thompson,FWD,Newcastle,2020-21,0.0,0.01,"recency-weighted FPL points, decay 8**(-age/3)"
 478,Owen,Goodman,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1,Goodman,GKP,Crystal Palace,2022-23,0.0,0.0,"recency-weighted FPL points, decay 8**(-age/3)"
