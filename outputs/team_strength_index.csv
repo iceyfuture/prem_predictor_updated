@@ -1,6 +1,6 @@
 rank,team,strength_index,proj_points,proj_gd,attack,defense,net_strength,proj_gf,proj_ga,form_last6,provisional
 1,Arsenal,100.0,77.9,39.2,0.432,0.546,0.978,70.3,31.1,6,False
-2,Man City,96.8,75.4,37.3,0.535,0.289,0.824,77.3,40.0,6,False
+2,Man City,96.8,75.4,37.3,0.535,0.288,0.824,77.3,40.0,6,False
 3,Liverpool,87.4,68.1,25.3,0.458,0.157,0.615,71.1,45.8,0,False
 4,Brighton,78.8,61.4,14.2,0.333,0.109,0.442,62.6,48.5,0,False
 5,Brentford,73.4,57.2,7.6,0.295,0.032,0.326,60.1,52.5,-1,False
